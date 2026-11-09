@@ -143,6 +143,11 @@ class ObjectScalePlacer:
                     "default": False,
                     "tooltip": "Дорисовать часть объекта, которую закрывал вырезанный сосед: "
                             "залить её цветом объекта и оставить второму проходу."}),
+                "neighbor_depth": ("FLOAT", {
+                    "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "С какой частью объекта по глубине сравнивать соседей: "
+                            "0 — задний край, 0.5 — середина, 1 — передний край. "
+                            "Вырезаются только соседи не дальше этого уровня."}),
             },
         }
 
@@ -156,7 +161,7 @@ class ObjectScalePlacer:
               auto_shift=False, shift_max=200, collision_band=0.35,
               shift_direction="auto", keep_reference_frame=False,
               cut_protect=False, cut_neighbors=False, neighbor_tolerance=0.15,
-              fill_hidden=False):
+              fill_hidden=False, neighbor_depth=0.5):
         img = scene[0].clone().float()
         H, W, _ = img.shape
         dev = img.device
@@ -211,7 +216,7 @@ class ObjectScalePlacer:
                                     align_corners=False)[0].permute(1, 2, 0)
             v = dep_n[old > 0.5]
             if v.numel() > 0:
-                near = (dep_n >= torch.quantile(v, 0.1) - depth_margin).float()
+                near = (dep_n >= torch.quantile(v, float(neighbor_depth))).float()
                 same = ((ref[..., :3] - bg_n).abs().amax(dim=-1) < float(neighbor_tolerance)).float()
                 rm_full = rm
                 rm = rm * (1 - _dilate(occ_n * near * same, 2))  # без кусков соседних предметов
