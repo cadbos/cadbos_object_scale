@@ -124,6 +124,11 @@ class ObjectScalePlacer:
                     "default": False,
                     "tooltip": "При масштабе 100% брать весь кадр reference вместо вырезки. "
                                 "Вместе с объектом переносятся все изменения пола и фона."}),
+                "cut_protect": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Убрать из вырезки объекта предметы, которые его загораживают "
+                            "(protect_mask). Только когда reference — кадр той же сцены "
+                            "(узел 235)."}),
             },
         }
 
@@ -135,7 +140,8 @@ class ObjectScalePlacer:
               offset_x=0, offset_y=0, shadow_source=None,
               shadow_margin=48, shadow_strength=1.0, shadow_reach=0,
               auto_shift=False, shift_max=200, collision_band=0.35,
-              shift_direction="auto", keep_reference_frame=False):
+              shift_direction="auto", keep_reference_frame=False,
+              cut_protect=False):
         img = scene[0].clone().float()
         H, W, _ = img.shape
         dev = img.device
@@ -169,6 +175,8 @@ class ObjectScalePlacer:
         else:
             rm = _auto_reference_mask(ref, bg_tolerance)
             src = "auto (однотонный фон)"
+        if cut_protect and protect_mask is not None and RH == H and RW == W:
+            rm = rm * (1 - _dilate(prot, 3))  # без предметов, загораживающих объект
         bb_ref = _bbox(rm)
         if bb_ref is None:
             raise ValueError("Object Scale Placer: на референсе не найден объект. "
