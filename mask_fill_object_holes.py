@@ -29,9 +29,15 @@ class MaskFillObjectHoles:
             "always_fill_below": ("INT", {
                 "default": 64, "min": 0, "max": 100000,
                 "tooltip": "Отверстия меньше этой площади закрываются всегда, px."}),
+            "drop_unchanged": ("FLOAT", {
+                "default": 0.3, "min": 0.0, "max": 1.0, "step": 0.05,
+                "tooltip": "Отдельные куски маски (кроме основного), у которых меньше этой доли "
+                        "пикселей отличается от чистого фона, удаляются — это соседние предметы. "
+                        "0 — не удалять."}),
         }}
 
-    def run(self, mask, image, clean, threshold, min_changed, always_fill_below):
+    def run(self, mask, image, clean, threshold, min_changed, always_fill_below,
+            drop_unchanged=0.3):
         m_t = mask.float()
         if m_t.dim() == 3:
             m_t = m_t.amax(dim=0)
@@ -57,5 +63,19 @@ class MaskFillObjectHoles:
             if int(comp.sum()) < int(always_fill_below) or changed >= float(min_changed):
                 out |= comp
                 filled += 1
-        info = f"отверстий: {n}; закрыто: {filled}; оставлено как просвет: {n - filled}"
+        dropped = 0
+        if drop_unchanged > 0:
+            lab2, n2 = ndi.label(out, structure=np.ones((3, 3)))
+            if n2 > 1:
+                sizes = ndi.sum(out, lab2, range(1, n2 + 1))
+                main = int(np.argmax(sizes)) + 1
+                for i in range(1, n2 + 1):
+                    if i == main:
+                        continue
+                    comp = lab2 == i
+                    if float((diff[comp] > float(threshold)).mean()) < float(drop_unchanged):
+                        out[comp] = False
+                        dropped += 1
+        info = (f"отверстий: {n}; закрыто: {filled}; оставлено как просвет: {n - filled}; "
+                f"удалено чужих кусков: {dropped}")
         return (torch.from_numpy(out.astype(np.float32))[None].to(mask.device), info)
