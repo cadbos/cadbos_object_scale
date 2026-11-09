@@ -129,6 +129,15 @@ class ObjectScalePlacer:
                     "tooltip": "Убрать из вырезки объекта предметы, которые его загораживают "
                             "(protect_mask). Только когда reference — кадр той же сцены "
                             "(узел 235)."}),
+                "cut_neighbors": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Убрать из вырезки куски соседних предметов (occluders) на той же "
+                            "глубине, которые не изменились относительно background. "
+                            "Только когда reference — кадр той же сцены (узел 235)."}),
+                "neighbor_tolerance": ("FLOAT", {
+                    "default": 0.15, "min": 0.01, "max": 1.0, "step": 0.01,
+                    "tooltip": "Насколько пиксель может отличаться от background, "
+                            "чтобы считаться частью соседнего предмета."}),
             },
         }
 
@@ -141,7 +150,7 @@ class ObjectScalePlacer:
               shadow_margin=48, shadow_strength=1.0, shadow_reach=0,
               auto_shift=False, shift_max=200, collision_band=0.35,
               shift_direction="auto", keep_reference_frame=False,
-              cut_protect=False):
+              cut_protect=False, cut_neighbors=False, neighbor_tolerance=0.15):
         img = scene[0].clone().float()
         H, W, _ = img.shape
         dev = img.device
@@ -177,6 +186,27 @@ class ObjectScalePlacer:
             src = "auto (однотонный фон)"
         if cut_protect and protect_mask is not None and RH == H and RW == W:
             rm = rm * (1 - _dilate(prot, 3))  # без предметов, загораживающих объект
+        if (cut_neighbors and occluders is not None and depth is not None
+                and background is not None and RH == H and RW == W):
+            occ_n = occluders.float().to(dev)
+            if occ_n.dim() == 3:
+                occ_n = occ_n.amax(dim=0)
+            occ_n = (_resize_mask(occ_n, H, W) > 0.5).float()
+            dep_n = depth[0].float().to(dev)
+            if dep_n.dim() == 3:
+                dep_n = dep_n.mean(dim=-1)
+            dep_n = _resize_mask(dep_n, H, W)
+            if not depth_near_is_bright:
+                dep_n = 1.0 - dep_n
+            bg_n = background[0].float().to(dev)[..., :3]
+            if bg_n.shape[0] != H or bg_n.shape[1] != W:
+                bg_n = F.interpolate(bg_n.permute(2, 0, 1)[None], size=(H, W), mode="bilinear",
+                                    align_corners=False)[0].permute(1, 2, 0)
+            v = dep_n[old > 0.5]
+            if v.numel() > 0:
+                near = (dep_n >= torch.quantile(v, 0.1) - depth_margin).float()
+                same = ((ref[..., :3] - bg_n).abs().amax(dim=-1) < float(neighbor_tolerance)).float()
+                rm = rm * (1 - _dilate(occ_n * near * same, 2))  # без кусков соседних предметов
         bb_ref = _bbox(rm)
         if bb_ref is None:
             raise ValueError("Object Scale Placer: на референсе не найден объект. "
