@@ -19,6 +19,7 @@ import torch
 import torch.nn.functional as F
 
 from .common import _resize_mask, _bbox, _dilate, _push_pull_fill, _auto_reference_mask, _erode, _blur, _draw_rect
+from .mask_convex_hull import MaskConvexHull
 
 
 # -------------------------------------------------------------------- node
@@ -138,6 +139,10 @@ class ObjectScalePlacer:
                     "default": 0.15, "min": 0.01, "max": 1.0, "step": 0.01,
                     "tooltip": "Насколько пиксель может отличаться от background, "
                             "чтобы считаться частью соседнего предмета."}),
+                "fill_hidden": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Дорисовать часть объекта, которую закрывал вырезанный сосед: "
+                            "залить её цветом объекта и оставить второму проходу."}),
             },
         }
 
@@ -150,7 +155,8 @@ class ObjectScalePlacer:
               shadow_margin=48, shadow_strength=1.0, shadow_reach=0,
               auto_shift=False, shift_max=200, collision_band=0.35,
               shift_direction="auto", keep_reference_frame=False,
-              cut_protect=False, cut_neighbors=False, neighbor_tolerance=0.15):
+              cut_protect=False, cut_neighbors=False, neighbor_tolerance=0.15,
+              fill_hidden=False):
         img = scene[0].clone().float()
         H, W, _ = img.shape
         dev = img.device
@@ -186,6 +192,7 @@ class ObjectScalePlacer:
             src = "auto (однотонный фон)"
         if cut_protect and protect_mask is not None and RH == H and RW == W:
             rm = rm * (1 - _dilate(prot, 3))  # без предметов, загораживающих объект
+        hidden = torch.zeros((RH, RW), device=dev)
         if (cut_neighbors and occluders is not None and depth is not None
                 and background is not None and RH == H and RW == W):
             occ_n = occluders.float().to(dev)
@@ -206,14 +213,22 @@ class ObjectScalePlacer:
             if v.numel() > 0:
                 near = (dep_n >= torch.quantile(v, 0.1) - depth_margin).float()
                 same = ((ref[..., :3] - bg_n).abs().amax(dim=-1) < float(neighbor_tolerance)).float()
+                rm_full = rm
                 rm = rm * (1 - _dilate(occ_n * near * same, 2))  # без кусков соседних предметов
+                if fill_hidden:
+                    hull = MaskConvexHull().run((rm > 0.5).float()[None])[0][0].to(dev)
+                    hidden = ((rm_full - rm) > 0.5).float() * hull
         bb_ref = _bbox(rm)
         if bb_ref is None:
             raise ValueError("Object Scale Placer: на референсе не найден объект. "
                              "Подключите reference_mask (RMBG) или измените bg_tolerance.")
         rx0, ry0, rx1, ry1 = bb_ref
+        if hidden.sum() > 0:  # закрытую соседом часть — залить цветом объекта
+            ref = torch.cat([_push_pull_fill(ref[..., :3], hidden, exclude=(1 - rm)),
+                            ref[..., 3:]], dim=-1)
         ref_c = ref[ry0:ry1, rx0:rx1]
         rm_c = rm[ry0:ry1, rx0:rx1]
+        hid_c = hidden[ry0:ry1, rx0:rx1]
         rw, rh = rx1 - rx0, ry1 - ry0
 
         # --- размер
@@ -411,9 +426,13 @@ class ObjectScalePlacer:
                                align_corners=False, antialias=antialias)[0, 0]
             am = _blur((am > 0.5).float(), 1)  # мягкий край без сужения
             am = am * (1 - prot[ny0:ny1, nx0:nx1])
+            hm = F.interpolate(hid_c[None, None], size=(nh, nw), mode="bilinear",
+                            align_corners=False)[0, 0]
+            hm = _blur((hm > 0.5).float(), 2) * (1 - prot[ny0:ny1, nx0:nx1])
+            a2 = torch.maximum(am, hm)
             region = guide[ny0:ny1, nx0:nx1]
-            guide[ny0:ny1, nx0:nx1] = region * (1 - am[..., None]) + rc * am[..., None]
-            obj_mask[ny0:ny1, nx0:nx1] = am
+            guide[ny0:ny1, nx0:nx1] = region * (1 - a2[..., None]) + rc * a2[..., None]
+            obj_mask[ny0:ny1, nx0:nx1] = am  # залитая часть не защищается — её дорисует второй проход
         else:
             base = guide.clone()
             guide = _draw_rect(guide, nx0, ny0, nx1, ny1, frame_thickness,
