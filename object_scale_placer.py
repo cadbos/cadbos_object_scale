@@ -148,6 +148,11 @@ class ObjectScalePlacer:
                     "tooltip": "С какой частью объекта по глубине сравнивать соседей: "
                             "0 — задний край, 0.5 — середина, 1 — передний край. "
                             "Вырезаются только соседи не дальше этого уровня."}),
+                "edge_box": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Если старый объект касается края кадра (обрезан), рамка нового "
+                            "берётся по рамке старого (fit=box), а не по пропорциям референса. "
+                            "Только для режима frame (узел 155)."}),
             },
         }
 
@@ -161,7 +166,7 @@ class ObjectScalePlacer:
               auto_shift=False, shift_max=200, collision_band=0.35,
               shift_direction="auto", keep_reference_frame=False,
               cut_protect=False, cut_neighbors=False, neighbor_tolerance=0.15,
-              fill_hidden=False, neighbor_depth=0.5):
+              fill_hidden=False, neighbor_depth=0.5, edge_box=False):
         img = scene[0].clone().float()
         H, W, _ = img.shape
         dev = img.device
@@ -181,6 +186,9 @@ class ObjectScalePlacer:
                              "GroundingDINO не нашёл объект. Проверьте название объекта.")
         ox0, oy0, ox1, oy1 = bb_old
         ow, oh = ox1 - ox0, oy1 - oy0
+        at_edge = ox0 <= 2 or oy0 <= 2 or ox1 >= W - 2 or oy1 >= H - 2
+        if edge_box and at_edge and mode == "frame":
+            fit = "box"  # объект обрезан краем кадра — его пропорции неизвестны
 
         prot = torch.zeros((H, W), device=dev)
         if protect_mask is not None:
