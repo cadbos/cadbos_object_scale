@@ -192,7 +192,7 @@ class ObjectScalePlacer:
         ox0, oy0, ox1, oy1 = bb_old
         ow, oh = ox1 - ox0, oy1 - oy0
         at_edge = ox0 <= 2 or oy0 <= 2 or ox1 >= W - 2 or oy1 >= H - 2
-        if edge_box and at_edge and mode == "frame":
+        if edge_box and at_edge and mode == "frame" and pad_left == 0 and pad_right == 0:
             fit = "box"  # объект обрезан краем кадра — его пропорции неизвестны
 
         prot = torch.zeros((H, W), device=dev)
