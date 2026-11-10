@@ -32,10 +32,15 @@ class ObjectEdgePad:
                 "default": True,
                 "tooltip": "Сохранять пропорции кадра: досыпать отступ по другой оси, "
                         "чтобы область вставки не выходила за край."}),
+            "crop_context": ("FLOAT", {
+                "default": 1.5, "min": 0.0, "max": 3.0, "step": 0.05,
+                "tooltip": "Расширять кадр так, чтобы квадрат кадрирования (объект x это значение) "
+                        "в него помещался. Должно быть не меньше context_from_mask_extend_factor "
+                        "узлов 100 и 211. 0 — не расширять."}),
         }}
 
     def run(self, image, mask, amount, max_fraction, edge_px, multiple,
-            keep_aspect=True):
+            keep_aspect=True, crop_context=1.5):
         img = image[0].float()[..., :3]
         H, W, _ = img.shape
         dev = img.device
@@ -72,6 +77,32 @@ class ObjectEdgePad:
                 else:
                     top += need_h // 2
                     bottom += need_h - need_h // 2
+            if need_w > 0:
+                if right and not left:
+                    right += need_w
+                elif left and not right:
+                    left += need_w
+                else:
+                    left += need_w // 2
+                    right += need_w - need_w // 2
+        if crop_context > 0:
+            def up2(v):
+                return int(-(-int(round(v)) // multiple) * multiple)  # вверх до кратного
+            # объект вместе с дорисовываемой частью, в координатах исходного кадра
+            ex0, ex1 = x0 - left, x1 + right
+            ey0, ey1 = y0 - top, y1 + bottom
+            side = max(ex1 - ex0, ey1 - ey0) * float(crop_context)
+            NW, NH = W + left + right, H + top + bottom
+            need_w, need_h = up2(max(0, side - NW)), up2(max(0, side - NH))
+            if need_h > 0:
+                if bottom and not top:
+                    bottom += need_h
+                elif top and not bottom:
+                    top += need_h
+                elif (ey0 + ey1) / 2 > H / 2:
+                    bottom += need_h
+                else:
+                    top += need_h
             if need_w > 0:
                 if right and not left:
                     right += need_w
