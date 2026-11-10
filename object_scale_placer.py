@@ -153,6 +153,10 @@ class ObjectScalePlacer:
                     "tooltip": "Если старый объект касается края кадра (обрезан), рамка нового "
                             "берётся по рамке старого (fit=box), а не по пропорциям референса. "
                             "Только для режима frame (узел 155)."}),
+                "pad_left": ("INT", {"default": 0, "min": 0, "max": 16384, "forceInput": True,
+                    "tooltip": "Выход left узла Object Edge Pad."}),
+                "pad_right": ("INT", {"default": 0, "min": 0, "max": 16384, "forceInput": True,
+                    "tooltip": "Выход right узла Object Edge Pad."}),
             },
         }
 
@@ -166,7 +170,8 @@ class ObjectScalePlacer:
               auto_shift=False, shift_max=200, collision_band=0.35,
               shift_direction="auto", keep_reference_frame=False,
               cut_protect=False, cut_neighbors=False, neighbor_tolerance=0.15,
-              fill_hidden=False, neighbor_depth=0.5, edge_box=False):
+              fill_hidden=False, neighbor_depth=0.5, edge_box=False,
+              pad_left=0, pad_right=0):
         img = scene[0].clone().float()
         H, W, _ = img.shape
         dev = img.device
@@ -260,6 +265,12 @@ class ObjectScalePlacer:
             nw, nh = rw * s, rh * s
         k = min(1.0, W / nw, H / nh)  # не больше кадра
         nw, nh = max(2, int(round(nw * k))), max(2, int(round(nh * k)))
+
+        if h_anchor == "center":  # объект продолжен дорисовкой — держать его видимый край
+            if pad_right > 0 and pad_left == 0:
+                h_anchor = "left"
+            elif pad_left > 0 and pad_right == 0:
+                h_anchor = "right"
 
         # --- положение
         if h_anchor == "left":
