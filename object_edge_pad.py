@@ -28,9 +28,14 @@ class ObjectEdgePad:
                 "default": 2, "min": 0, "max": 64,
                 "tooltip": "Объект считается обрезанным, если ближе к краю, px."}),
             "multiple": ("INT", {"default": 16, "min": 1, "max": 128}),
+            "keep_aspect": ("BOOLEAN", {
+                "default": True,
+                "tooltip": "Сохранять пропорции кадра: досыпать отступ по другой оси, "
+                        "чтобы область вставки не выходила за край."}),
         }}
 
-    def run(self, image, mask, amount, max_fraction, edge_px, multiple):
+    def run(self, image, mask, amount, max_fraction, edge_px, multiple,
+            keep_aspect=True):
         img = image[0].float()[..., :3]
         H, W, _ = img.shape
         dev = img.device
@@ -53,6 +58,28 @@ class ObjectEdgePad:
         right = pad(ow, W) if x1 >= W - edge_px else 0
         top = pad(oh, H) if y0 <= edge_px else 0
         bottom = pad(oh, H) if y1 >= H - edge_px else 0
+        if keep_aspect and left + right + top + bottom > 0:
+            def up(v):
+                return int(-(-v // multiple) * multiple)  # округление вверх до кратного
+            NW, NH = W + left + right, H + top + bottom
+            need_h = up(max(0, round(NW * H / W) - NH))
+            need_w = up(max(0, round(NH * W / H) - NW))
+            if need_h > 0:
+                if bottom and not top:
+                    bottom += need_h
+                elif top and not bottom:
+                    top += need_h
+                else:
+                    top += need_h // 2
+                    bottom += need_h - need_h // 2
+            if need_w > 0:
+                if right and not left:
+                    right += need_w
+                elif left and not right:
+                    left += need_w
+                else:
+                    left += need_w // 2
+                    right += need_w - need_w // 2
         if left + right + top + bottom == 0:
             return (image, z, 0, 0, 0, 0, "объект не касается края — кадр без изменений")
 
