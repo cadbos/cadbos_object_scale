@@ -159,6 +159,10 @@ class ObjectScalePlacer:
                     "tooltip": "Выход left узла Object Edge Pad."}),
                 "pad_right": ("INT", {"default": 0, "min": 0, "max": 16384, "forceInput": True,
                     "tooltip": "Выход right узла Object Edge Pad."}),
+                "drop_inner_protect": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Не защищать предметы, которые целиком лежат внутри нового объекта "
+                            "(мелочь на полу за ним). Только для режима collage (узел 235)."}),
             },
         }
 
@@ -173,7 +177,7 @@ class ObjectScalePlacer:
               shift_direction="auto", keep_reference_frame=False,
               cut_protect=False, cut_neighbors=False, neighbor_tolerance=0.15,
               fill_hidden=False, neighbor_depth=0.5, edge_box=False,
-              pad_left=0, pad_right=0):
+              pad_left=0, pad_right=0, drop_inner_protect=False):
         img = scene[0].clone().float()
         H, W, _ = img.shape
         dev = img.device
@@ -388,6 +392,19 @@ class ObjectScalePlacer:
                 extra = _dilate(_erode(extra, 5), 9)  # убрать мелкие островки, чуть расширить
                 extra_px = int(extra.sum().item())
                 prot = torch.maximum(prot, extra)
+
+        if drop_inner_protect and mode == "collage" and prot.sum() > 0:
+            fp = torch.zeros((H, W), device=dev)
+            fp[ny0:ny1, nx0:nx1] = (F.interpolate(rm_c[None, None], size=(nh, nw), mode="bilinear",
+                                    align_corners=False)[0, 0] > 0.5).float()
+            fp = _dilate(fp, 2).cpu().numpy() > 0.5
+            p_np = prot.cpu().numpy() > 0.5
+            lab, n = ndi.label(p_np)
+            for i in range(1, n + 1):
+                comp = lab == i
+                if not (comp & ~fp).any():  # целиком внутри нового объекта — не загораживает его
+                    p_np[comp] = False
+            prot = torch.from_numpy(p_np.astype(np.float32)).to(dev)
 
         # --- 1) фон без старого объекта
         if background is not None:
