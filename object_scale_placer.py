@@ -17,6 +17,8 @@ cadbos_object_scale — узел ComfyUI для управления масшт�
 
 import torch
 import torch.nn.functional as F
+import numpy as np
+import scipy.ndimage as ndi
 
 from .common import _resize_mask, _bbox, _dilate, _push_pull_fill, _auto_reference_mask, _erode, _blur, _draw_rect
 from .mask_convex_hull import MaskConvexHull
@@ -232,7 +234,14 @@ class ObjectScalePlacer:
                 near = (dep_n >= torch.quantile(v, float(neighbor_depth))).float()
                 same = ((ref[..., :3] - bg_n).abs().amax(dim=-1) < float(neighbor_tolerance)).float()
                 rm_full = rm
-                rm = rm * (1 - _dilate(occ_n * near * same, 2))  # без кусков соседних предметов
+                c = (_dilate(occ_n * near * same, 2) * (rm > 0.5).float()).cpu().numpy() > 0.5
+                if c.any():
+                    outside = (rm <= 0.5).cpu().numpy()
+                    lab, _ = ndi.label(c)
+                    edge = ndi.binary_dilation(outside, iterations=2) & c
+                    ids = np.unique(lab[edge])
+                    c = np.isin(lab, ids[ids > 0])  # только куски у внешнего края объекта
+                    rm = rm * (1 - torch.from_numpy(c.astype(np.float32)).to(dev))
                 if fill_hidden:
                     hull = MaskConvexHull().run((rm > 0.5).float()[None])[0][0].to(dev)
                     hidden = ((rm_full - rm) > 0.5).float() * hull
