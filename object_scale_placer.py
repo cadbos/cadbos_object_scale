@@ -376,7 +376,7 @@ class ObjectScalePlacer:
                 zone[ny0:ny1, nx0:nx1] = 1.0
                 zone = _dilate(zone, 8)
                 extra = occ * zone * (dep > d_front + depth_margin).float() * (1 - old)
-                extra = _dilate(_erode(extra, 2), 6)  # убрать крошки, чуть расширить
+                extra = _dilate(_erode(extra, 5), 9)  # убрать мелкие островки, чуть расширить
                 extra_px = int(extra.sum().item())
                 prot = torch.maximum(prot, extra)
 
