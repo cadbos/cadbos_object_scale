@@ -49,7 +49,8 @@ def _split(a, separate, dep, depth_gap):
     return lab
 
 
-def _pick(a, mode, index, px, py, separate, min_fraction, dep, ref, depth_gap=0.05):
+def _pick(a, mode, index, px, py, separate, min_fraction, dep, ref,
+          depth_gap=0.05, attach=0):
     H, W = a.shape
     lab = _split(a, separate, dep, depth_gap)
     ids = [int(i) for i in np.unique(lab) if i > 0]
@@ -90,12 +91,28 @@ def _pick(a, mode, index, px, py, separate, min_fraction, dep, ref, depth_gap=0.
         else:
             k = max(range(len(st)), key=lambda j: st[j]["area"])
     sel = lab == st[k]["id"]
+    attached = 0
+    if attach > 0:
+        kept = np.isin(lab, [s["id"] for s in st])
+        rest = a & ~kept                      # отброшенные мелкие куски
+        if rest.any():
+            d_sel = ndi.distance_transform_edt(~sel)
+            oth = kept & ~sel
+            d_oth = ndi.distance_transform_edt(~oth) if oth.any() else None
+            rl, rn = ndi.label(rest)
+            for i in range(1, rn + 1):
+                c = rl == i
+                ds = float(d_sel[c].min())
+                if ds <= attach and (d_oth is None or ds < float(d_oth[c].min())):
+                    sel |= c
+                    attached += 1
     lines = []
     for j, s in enumerate(st):
         d = "" if s["depth"] is None else f", глубина {s['depth']:.2f}"
         mark = "  <- выбран" if j == k else ""
         lines.append(f"#{j}: центр x={100 * s['cx'] / W:.0f}%, площадь {s['area']}{d}{mark}")
-    info = f"найдено экземпляров: {len(st)} (режим {mode})\n" + "\n".join(lines)
+    info = (f"найдено экземпляров: {len(st)} (режим {mode}); "
+            f"присоединено мелких кусков: {attached}\n" + "\n".join(lines))
     return sel, a & ~sel, info
 
 
@@ -134,10 +151,13 @@ class MaskPickInstance:
             "depth": ("IMAGE", {"tooltip": "Карта глубины (узел 105)."}),
             "reference": ("MASK", {"tooltip": "Для режима overlap."}),
             "depth_near_is_bright": ("BOOLEAN", {"default": True}),
+            "attach": ("INT", {"default": 32, "min": 0, "max": 256,
+                               "tooltip": "Мелкие куски (ножки) ближе этого расстояния, px, "
+                                          "присоединяются к выбранному предмету. 0 — выкидывать."}),
         }}
 
     def run(self, mask, mode, index, point_x, point_y, separate, min_fraction,
-            depth=None, reference=None, depth_near_is_bright=True):
+            depth=None, reference=None, depth_near_is_bright=True, attach=32):
         m = mask.float()
         if m.dim() == 3:
             m = m.amax(dim=0)
@@ -161,6 +181,8 @@ class MaskPickInstance:
             if r.dim() == 3:
                 r = r.amax(dim=0)
             ref = (_resize_mask(r, H, W) > 0.5).cpu().numpy()
-        sel, others, info = _pick(a, mode, index, float(point_x), float(point_y),
-                                  int(separate), float(min_fraction), dep, ref)
+        sel, others, info = _pick(a, mode, index,
+                                  float(point_x), float(point_y),
+                                  int(separate), float(min_fraction),
+                                  dep, ref, attach=int(attach))
         return (to_t(sel), to_t(others), info)
