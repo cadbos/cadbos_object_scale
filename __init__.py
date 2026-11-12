@@ -14,6 +14,7 @@ from .mask_fill_object_holes import MaskFillObjectHoles
 from .mask_clear_top import MaskClearTop
 from .object_edge_pad import ObjectEdgePad, OutpaintSwitch, ObjectEdgeCrop
 from .mask_pick_instance import MaskPickInstance
+from .object_clay_view import ObjectClayView
 
 
 NODE_CLASS_MAPPINGS = {
@@ -35,6 +36,7 @@ NODE_CLASS_MAPPINGS = {
     "OutpaintSwitch": OutpaintSwitch,
     "ObjectEdgeCrop": ObjectEdgeCrop,
     "MaskPickInstance": MaskPickInstance,
+    "ObjectClayView": ObjectClayView,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "ObjectScalePlacer": "Object Scale Placer (cadbos)",
@@ -55,6 +57,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "OutpaintSwitch": "Outpaint Switch",
     "ObjectEdgeCrop": "Object Edge Crop",
     "MaskPickInstance": "Mask Pick Instance",
+    "ObjectClayView": "Object Clay View",
 }
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
