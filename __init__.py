@@ -16,6 +16,7 @@ from .object_edge_pad import ObjectEdgePad, OutpaintSwitch, ObjectEdgeCrop
 from .mask_pick_instance import MaskPickInstance
 from .object_clay_view import ObjectClayView
 from .object_context_crop import ObjectContextCrop
+from .mask_smooth_edge import MaskSmoothEdge
 
 
 NODE_CLASS_MAPPINGS = {
@@ -39,6 +40,7 @@ NODE_CLASS_MAPPINGS = {
     "MaskPickInstance": MaskPickInstance,
     "ObjectClayView": ObjectClayView,
     "ObjectContextCrop": ObjectContextCrop,
+    "MaskSmoothEdge": MaskSmoothEdge,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "ObjectScalePlacer": "Object Scale Placer (cadbos)",
@@ -61,6 +63,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MaskPickInstance": "Mask Pick Instance",
     "ObjectClayView": "Object Clay View",
     "ObjectContextCrop": "Object Context Crop",
+    "MaskSmoothEdge": "Mask Smooth Edge",
 }
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
