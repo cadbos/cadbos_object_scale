@@ -170,6 +170,10 @@ class ObjectScalePlacer:
                     "default": False,
                     "tooltip": "Заменить фон вокруг вырезки цветами объекта, чтобы при "
                                "масштабировании край не смешивался с фоном."}),
+                "soft_alpha": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Брать край из reference_mask как есть (мягкий), а не делать "
+                               "его резким. Для мягкой маски из Mask Smooth Edge."}),
             },
         }
 
@@ -185,7 +189,7 @@ class ObjectScalePlacer:
               cut_protect=False, cut_neighbors=False, neighbor_tolerance=0.15,
               fill_hidden=False, neighbor_depth=0.5, edge_box=False,
               pad_left=0, pad_right=0, drop_inner_protect=False,
-              edge_erode=0, decontaminate=False):
+              edge_erode=0, decontaminate=False, soft_alpha=False):
         img = scene[0].clone().float()
         H, W, _ = img.shape
         dev = img.device
@@ -488,7 +492,10 @@ class ObjectScalePlacer:
                                antialias=antialias)[0].permute(1, 2, 0).clamp(0, 1)
             am = F.interpolate(rm_c[None, None], size=(nh, nw), mode="bilinear",
                                align_corners=False, antialias=antialias)[0, 0]
-            am = _blur((am > 0.5).float(), 1)  # мягкий край без сужения
+            if soft_alpha:
+                am = am.clamp(0, 1)  # мягкий край из маски как есть
+            else:
+                am = _blur((am > 0.5).float(), 1)  # мягкий край без сужения
             am = am * (1 - prot[ny0:ny1, nx0:nx1])
             hm = F.interpolate(hid_c[None, None], size=(nh, nw), mode="bilinear",
                             align_corners=False)[0, 0]
