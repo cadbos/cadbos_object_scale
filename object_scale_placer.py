@@ -163,6 +163,13 @@ class ObjectScalePlacer:
                     "default": False,
                     "tooltip": "Не защищать предметы, которые целиком лежат внутри нового объекта "
                             "(мелочь на полу за ним). Только для режима collage (узел 235)."}),
+                "edge_erode": ("INT", {
+                    "default": 0, "min": 0, "max": 16,
+                    "tooltip": "Срезать край вырезки на столько px (убирает светлую кайму)."}),
+                "decontaminate": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Заменить фон вокруг вырезки цветами объекта, чтобы при "
+                               "масштабировании край не смешивался с фоном."}),
             },
         }
 
@@ -177,7 +184,8 @@ class ObjectScalePlacer:
               shift_direction="auto", keep_reference_frame=False,
               cut_protect=False, cut_neighbors=False, neighbor_tolerance=0.15,
               fill_hidden=False, neighbor_depth=0.5, edge_box=False,
-              pad_left=0, pad_right=0, drop_inner_protect=False):
+              pad_left=0, pad_right=0, drop_inner_protect=False,
+              edge_erode=0, decontaminate=False):
         img = scene[0].clone().float()
         H, W, _ = img.shape
         dev = img.device
@@ -257,6 +265,12 @@ class ObjectScalePlacer:
         if hidden.sum() > 0:  # закрытую соседом часть — залить цветом объекта
             ref = torch.cat([_push_pull_fill(ref[..., :3], hidden, exclude=(1 - rm)),
                             ref[..., 3:]], dim=-1)
+        ref_orig = ref  # без обработки краёв — для переноса тени
+        if edge_erode > 0:  # срезать светлую кайму по краю вырезки
+            rm = _erode((rm > 0.5).float(), int(edge_erode))
+        if decontaminate:   # вокруг объекта — его собственные цвета, а не фон
+            ref = torch.cat([_push_pull_fill(ref[..., :3], (rm <= 0.5).float()),
+                             ref[..., 3:]], dim=-1)
         ref_c = ref[ry0:ry1, rx0:rx1]
         rm_c = rm[ry0:ry1, rx0:rx1]
         hid_c = hidden[ry0:ry1, rx0:rx1]
@@ -435,7 +449,7 @@ class ObjectScalePlacer:
             sx0, sy0 = max(0, rx0 - m), max(0, ry0 - m)
             sx1, sy1 = min(RW, rx1 + m), min(RH, ry1 + m)
             wts = torch.tensor([0.299, 0.587, 0.114], device=dev)
-            l_ref = (ref[sy0:sy1, sx0:sx1, :3] * wts).sum(-1)
+            l_ref = (ref_orig[sy0:sy1, sx0:sx1, :3] * wts).sum(-1)
             l_bg = (sh[sy0:sy1, sx0:sx1] * wts).sum(-1)
             ratio = (l_ref + 1e-3) / (l_bg + 1e-3)
             objm = _dilate((rm[sy0:sy1, sx0:sx1] > 0.5).float(), 4)
