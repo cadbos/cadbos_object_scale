@@ -35,18 +35,46 @@ _PARSE = [
 ]
 
 
+def _norm(text):
+    return str(text or "").lower().replace("_", "-").replace(" ", "-").replace("–", "-")
+
+
 def _parse_view(text):
-    t = str(text).lower().replace("_", "-").replace(" ", "-").replace("–", "-")
+    t = _norm(text)
     for key, words in _PARSE:
         if any(w in t for w in words):
             return key
     return None
 
 
+def _combine_view(side_text, dir_text):
+    """Ответ «какая сторона видна» + ответ «куда смотрит перед» -> ключ VIEWS."""
+    s, d = _norm(side_text), _norm(dir_text)
+    side = "back" if ("back" in s or "behind" in s) else ("front" if "front" in s else None)
+    if "left" in d:
+        direction = "left"
+    elif "right" in d:
+        direction = "right"
+    elif "away" in d:
+        direction = "away"
+    elif "camera" in d or "toward" in d or "viewer" in d:
+        direction = "camera"
+    else:
+        direction = None
+    if direction in ("left", "right"):
+        return f"{side}-{direction}" if side else f"facing-{direction}"
+    if side:                 # при противоречии главный — ответ о стороне
+        return side
+    if direction == "away":
+        return "back"
+    if direction == "camera":
+        return "front"
+    return None
+
+
 class ObjectClayView:
     """Рисует старый объект как серую глиняную модель по карте глубины
-    (ближе — светлее, с освещением сверху слева) и выдаёт фразу о ракурсе.
-    Нужен вместо плоского серого силуэта (узел 397)."""
+    (ближе — светлее, с освещением сверху слева) и выдаёт фразу о ракурсе."""
     CATEGORY = "cadbos/object"
     FUNCTION = "run"
     RETURN_TYPES = ("IMAGE", "STRING", "STRING")
@@ -56,21 +84,27 @@ class ObjectClayView:
     def INPUT_TYPES(cls):
         return {"required": {
             "depth": ("IMAGE", {"tooltip": "Карта глубины (узел 105)."}),
-            "mask": ("MASK", {"tooltip": "Старый объект (узел 61)."}),
-            "view": (["auto"] + list(VIEWS), {
+            "mask": ("MASK", {"tooltip": "Старый объект (узел 322)."}),
+            "view": (["auto", "none"] + list(VIEWS), {
                 "default": "auto",
-                "tooltip": "Какой стороной объект повёрнут к камере. auto — взять из "
-                           "view_text (ответ Qwen3-VL); если его нет — без фразы."}),
+                "tooltip": "Какой стороной объект повёрнут к камере. auto — по ответам "
+                           "Qwen3-VL (view_side + view_dir, иначе view_text); "
+                           "none — без фразы, только глиняная модель."}),
             "relief": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 4.0, "step": 0.1,
                                  "tooltip": "Сила объёма. 0 — только яркость по глубине."}),
             "depth_near_is_bright": ("BOOLEAN", {"default": True}),
         },
         "optional": {
             "view_text": ("STRING", {"forceInput": True,
-                                     "tooltip": "Ответ Qwen3-VL: front, back, left ..."}),
+                                     "tooltip": "Ответ Qwen3-VL одним словом: front, back-left ..."}),
+            "view_side": ("STRING", {"forceInput": True,
+                                     "tooltip": "Ответ Qwen3-VL: front или back."}),
+            "view_dir": ("STRING", {"forceInput": True,
+                                    "tooltip": "Ответ Qwen3-VL: left, right, camera или away."}),
         }}
 
-    def run(self, depth, mask, view, relief, depth_near_is_bright, view_text=""):
+    def run(self, depth, mask, view, relief, depth_near_is_bright,
+            view_text="", view_side=None, view_dir=None):
         m = mask.float()
         if m.dim() == 3:
             m = m.amax(dim=0)
@@ -107,11 +141,20 @@ class ObjectClayView:
         a = _blur(obj, 1)[..., None]
         img = img * (1 - a) + shade[..., None] * a
 
-        key = view if view != "auto" else _parse_view(view_text or "")
+        if view == "none":
+            return (img[None], "", "ракурс: без фразы (только глиняная модель)")
+        if view != "auto":
+            key, src = view, "вручную"
+        elif view_side is not None or view_dir is not None:
+            key = _combine_view(view_side, view_dir)
+            src = (f"по ответам VLM: сторона '{str(view_side).strip()}', "
+                   f"направление '{str(view_dir).strip()}'")
+        else:
+            key = _parse_view(view_text)
+            src = f"по ответу VLM '{str(view_text).strip()}'"
         if key is None:
-            return (img[None], "", f"ракурс не задан (ответ VLM: '{view_text}')")
+            return (img[None], "", f"ракурс не определён ({src}) — без фразы")
         text = (f"Required view of the result: the object is {VIEWS[key]}. "
-                f"In Picture 2, lighter parts of the gray model are closer to the "
+                f"In the gray clay model, lighter parts are closer to the "
                 f"camera and darker parts are farther away.")
-        src = "вручную" if view != "auto" else f"по ответу VLM '{str(view_text).strip()}'"
         return (img[None], text, f"ракурс: {key} ({src})")
