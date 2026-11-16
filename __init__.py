@@ -18,6 +18,7 @@ from .object_clay_view import ObjectClayView
 from .object_context_crop import ObjectContextCrop
 from .mask_smooth_edge import MaskSmoothEdge
 from .mask_window import MaskWindow
+from .window_preview import WindowPreview
 
 
 NODE_CLASS_MAPPINGS = {
@@ -43,6 +44,7 @@ NODE_CLASS_MAPPINGS = {
     "ObjectContextCrop": ObjectContextCrop,
     "MaskSmoothEdge": MaskSmoothEdge,
     "MaskWindow": MaskWindow,
+    "WindowPreview": WindowPreview,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "ObjectScalePlacer": "Object Scale Placer (cadbos)",
@@ -67,6 +69,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ObjectContextCrop": "Object Context Crop",
     "MaskSmoothEdge": "Mask Smooth Edge",
     "MaskWindow": "Mask Window",
+    "WindowPreview": "Window Preview",
 }
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
