@@ -1,6 +1,7 @@
 import torch
 
-from .common import _resize_mask, _blur, _bbox
+from .common import _resize_mask, _blur, _bbox, _push_pull_fill
+from .mask_convex_hull import MaskConvexHull
 
 
 VIEWS = {
@@ -101,10 +102,13 @@ class ObjectClayView:
                                      "tooltip": "Ответ Qwen3-VL: front или back."}),
             "view_dir": ("STRING", {"forceInput": True,
                                     "tooltip": "Ответ Qwen3-VL: left, right, camera или away."}),
+            "simplify": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.1,
+                                   "tooltip": "Упростить модель до грубого блока, чтобы Qwen брал "
+                                              "из неё только позу, а не форму. 0 — точная модель."}),
         }}
 
     def run(self, depth, mask, view, relief, depth_near_is_bright,
-            view_text="", view_side=None, view_dir=None):
+            view_text="", view_side=None, view_dir=None, simplify=0.0):
         m = mask.float()
         if m.dim() == 3:
             m = m.amax(dim=0)
@@ -115,6 +119,7 @@ class ObjectClayView:
         bb = _bbox(obj)
         if bb is None:
             return (img[None], "", "маска пустая")
+        size = float(max(bb[2] - bb[0], bb[3] - bb[1]))
 
         d = depth[0].float().to(dev)
         if d.dim() == 3:
@@ -125,10 +130,18 @@ class ObjectClayView:
         vals = d[obj > 0.5]
         lo, hi = torch.quantile(vals, 0.02), torch.quantile(vals, 0.98)
         dn = ((d - lo) / (hi - lo).clamp_min(1e-4)).clamp(0, 1)
-        dn = _blur(dn, 2)
+
+        if simplify > 0:
+            # грубый блок: выпуклая оболочка, глубина в промежутках — по самому предмету
+            hull = MaskConvexHull().run(obj[None])[0][0].to(dev)
+            gap = (hull - obj).clamp(0, 1)
+            dn = _push_pull_fill(dn[..., None], gap, exclude=(1 - obj))[..., 0]
+            obj = hull
+            dn = _blur(dn, max(2, int(round(float(simplify) * size * 0.08))))
+        else:
+            dn = _blur(dn, 2)
 
         # нормали поверхности по глубине и простое освещение сверху слева
-        size = float(max(bb[2] - bb[0], bb[3] - bb[1]))
         gy, gx = torch.gradient(dn)
         k = float(relief) * size * 0.5
         n = torch.stack([-gx * k, -gy * k, torch.ones_like(dn)], dim=-1)
@@ -138,7 +151,7 @@ class ObjectClayView:
         lam = (n * light).sum(-1).clamp_min(0)
         shade = (0.18 + 0.55 * lam + 0.22 * dn).clamp(0, 1)
 
-        a = _blur(obj, 1)[..., None]
+        a = _blur(obj, max(1, int(round(float(simplify) * size * 0.02))))[..., None]
         img = img * (1 - a) + shade[..., None] * a
 
         if view == "none":
