@@ -50,7 +50,7 @@ def _split(a, separate, dep, depth_gap):
 
 
 def _pick(a, mode, index, px, py, separate, min_fraction, dep, ref,
-          depth_gap=0.05, attach=0):
+          depth_gap=0.05, attach=0, window_tol=0.15):
     H, W = a.shape
     lab = _split(a, separate, dep, depth_gap)
     ids = [int(i) for i in np.unique(lab) if i > 0]
@@ -58,19 +58,22 @@ def _pick(a, mode, index, px, py, separate, min_fraction, dep, ref,
     for i in ids:
         c = lab == i
         ys, xs = np.nonzero(c)
-        st.append(dict(id=i, area=len(xs), cx=float(xs.mean()), bottom=int(ys.max()),
+        st.append(dict(id=i, area=len(xs), cx=float(xs.mean()), cy=float(ys.mean()),
+                       bottom=int(ys.max()),
                        depth=float(np.median(dep[c])) if dep is not None else None,
                        ov=int((c & ref).sum()) if ref is not None else 0))
     big = max(s["area"] for s in st)
     st = [s for s in st if s["area"] >= min_fraction * big]
     st.sort(key=lambda s: s["cx"])  # нумерация слева направо
+
+    def near_key(j):  # чем больше, тем ближе к камере
+        s = st[j]
+        return s["depth"] if s["depth"] is not None else s["bottom"]
+
     if mode == "largest":
         k = max(range(len(st)), key=lambda j: st[j]["area"])
     elif mode == "nearest":
-        if dep is not None:
-            k = max(range(len(st)), key=lambda j: st[j]["depth"])
-        else:  # без глубины: чей низ ниже в кадре, тот ближе
-            k = max(range(len(st)), key=lambda j: st[j]["bottom"])
+        k = max(range(len(st)), key=near_key)
     elif mode == "leftmost":
         k = 0
     elif mode == "rightmost":
@@ -85,6 +88,23 @@ def _pick(a, mode, index, px, py, separate, min_fraction, dep, ref,
             ys, xs = np.nonzero(lab == s["id"])
             return float(((xs - x) ** 2 + (ys - y) ** 2).min())
         k = min(range(len(st)), key=lambda j: dist(st[j]))
+    elif mode == "window":
+        if ref is None or not ref.any():
+            k = max(range(len(st)), key=near_key)
+        else:
+            fr = [s["ov"] / s["area"] for s in st]
+            best = max(fr)
+            if best > 0:  # из почти одинаково попавших в окно — ближайший к камере
+                cand = [j for j in range(len(st)) if fr[j] >= best - float(window_tol)]
+                k = max(cand, key=near_key)
+            else:         # окно не задевает ни один предмет — ближайший к окну
+                wy, wx = np.nonzero(ref)
+                x0, x1, y0, y1 = wx.min(), wx.max(), wy.min(), wy.max()
+                def gap(s):
+                    dx = max(x0 - s["cx"], 0.0, s["cx"] - x1)
+                    dy = max(y0 - s["cy"], 0.0, s["cy"] - y1)
+                    return dx * dx + dy * dy
+                k = min(range(len(st)), key=lambda j: gap(st[j]))
     else:  # overlap
         if ref is not None and max(s["ov"] for s in st) > 0:
             k = max(range(len(st)), key=lambda j: st[j]["ov"])
@@ -109,8 +129,9 @@ def _pick(a, mode, index, px, py, separate, min_fraction, dep, ref,
     lines = []
     for j, s in enumerate(st):
         d = "" if s["depth"] is None else f", глубина {s['depth']:.2f}"
+        w = "" if ref is None else f", в окне {100 * s['ov'] / s['area']:.0f}%"
         mark = "  <- выбран" if j == k else ""
-        lines.append(f"#{j}: центр x={100 * s['cx'] / W:.0f}%, площадь {s['area']}{d}{mark}")
+        lines.append(f"#{j}: центр x={100 * s['cx'] / W:.0f}%, площадь {s['area']}{d}{w}{mark}")
     info = (f"найдено экземпляров: {len(st)} (режим {mode}); "
             f"присоединено мелких кусков: {attached}\n" + "\n".join(lines))
     return sel, a & ~sel, info
@@ -129,13 +150,15 @@ class MaskPickInstance:
         return {"required": {
             "mask": ("MASK", {"tooltip": "Все найденные предметы (GroundingDINO + SAM)."}),
             "mode": (["nearest", "largest", "leftmost", "rightmost", "center",
-                      "index", "point", "overlap"], {
+                      "index", "point", "overlap", "window"], {
                 "default": "nearest",
                 "tooltip": "nearest — ближайший к камере; largest — самый крупный; "
                            "leftmost / rightmost / center — по положению в кадре; "
                            "index — по номеру слева направо (см. info); "
                            "point — ближайший к точке point_x/point_y; "
-                           "overlap — сильнее всего пересекается с reference."}),
+                           "overlap — сильнее всего пересекается с reference; "
+                           "window — больше всего лежит в окне reference "
+                           "(при равенстве — ближайший к камере)."}),
             "index": ("INT", {"default": 0, "min": 0, "max": 64}),
             "point_x": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01,
                                   "tooltip": "Доля ширины кадра (0 — левый край)."}),
@@ -149,15 +172,20 @@ class MaskPickInstance:
         },
         "optional": {
             "depth": ("IMAGE", {"tooltip": "Карта глубины (узел 105)."}),
-            "reference": ("MASK", {"tooltip": "Для режима overlap."}),
+            "reference": ("MASK", {"tooltip": "Для режимов overlap и window."}),
             "depth_near_is_bright": ("BOOLEAN", {"default": True}),
             "attach": ("INT", {"default": 32, "min": 0, "max": 256,
                                "tooltip": "Мелкие куски (ножки) ближе этого расстояния, px, "
                                           "присоединяются к выбранному предмету. 0 — выкидывать."}),
+            "window_tol": ("FLOAT", {"default": 0.15, "min": 0.0, "max": 1.0, "step": 0.05,
+                                     "tooltip": "Режим window: предметы, чья доля в окне меньше "
+                                                "лучшей не больше чем на это значение, считаются "
+                                                "равными; из них берётся ближайший к камере."}),
         }}
 
     def run(self, mask, mode, index, point_x, point_y, separate, min_fraction,
-            depth=None, reference=None, depth_near_is_bright=True, attach=32):
+            depth=None, reference=None, depth_near_is_bright=True, attach=32,
+            window_tol=0.15):
         m = mask.float()
         if m.dim() == 3:
             m = m.amax(dim=0)
@@ -181,8 +209,7 @@ class MaskPickInstance:
             if r.dim() == 3:
                 r = r.amax(dim=0)
             ref = (_resize_mask(r, H, W) > 0.5).cpu().numpy()
-        sel, others, info = _pick(a, mode, index,
-                                  float(point_x), float(point_y),
-                                  int(separate), float(min_fraction),
-                                  dep, ref, attach=int(attach))
+        sel, others, info = _pick(a, mode, index, float(point_x), float(point_y),
+                                  int(separate), float(min_fraction), dep, ref,
+                                  attach=int(attach), window_tol=float(window_tol))
         return (to_t(sel), to_t(others), info)
