@@ -48,20 +48,27 @@ def _parse_view(text):
     return None
 
 
+def _last_key(text, table):
+    """Ключ из table, чьё слово встречается в тексте последним."""
+    best, pos = None, -1
+    for key, words in table:
+        for w in words:
+            i = text.rfind(w)
+            if i > pos:
+                best, pos = key, i
+    return best
+
+
 def _combine_view(side_text, dir_text):
     """Ответ «какая сторона видна» + ответ «куда смотрит перед» -> ключ VIEWS."""
-    s, d = _norm(side_text), _norm(dir_text)
-    side = "back" if ("back" in s or "behind" in s) else ("front" if "front" in s else None)
-    if "left" in d:
-        direction = "left"
-    elif "right" in d:
-        direction = "right"
-    elif "away" in d:
-        direction = "away"
-    elif "camera" in d or "toward" in d or "viewer" in d:
-        direction = "camera"
-    else:
-        direction = None
+    s = str(side_text or "").lower()
+    d = str(dir_text or "").lower()
+    for phrase in ("away from the camera", "away from the viewer", "away from us"):
+        d = d.replace(phrase, "away")
+    side = _last_key(s, [("back", ["back", "behind"]), ("front", ["front"])])
+    direction = _last_key(d, [("left", ["left"]), ("right", ["right"]),
+                              ("away", ["away"]),
+                              ("camera", ["camera", "toward the viewer", "towards the viewer"])])
     if direction in ("left", "right"):
         return f"{side}-{direction}" if side else f"facing-{direction}"
     if side:                 # при противоречии главный — ответ о стороне
