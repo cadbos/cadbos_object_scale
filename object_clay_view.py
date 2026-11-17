@@ -23,6 +23,20 @@ VIEWS = {
                     "right edge of the image",
 }
 
+
+# ключ ракурса -> направление камеры для Multiple-Angles LoRA
+AZIMUTH = {
+    "front": "front view",
+    "front-left": "front-left quarter view",
+    "front-right": "front-right quarter view",
+    "facing-left": "left side view",
+    "facing-right": "right side view",
+    "back": "back view",
+    "back-left": "back-left quarter view",
+    "back-right": "back-right quarter view",
+}
+
+
 # порядок важен: сначала составные варианты, потом простые
 _PARSE = [
     ("back-left", ["back-left", "left-back"]),
@@ -91,8 +105,8 @@ class ObjectClayView:
     (ближе — светлее, с освещением сверху слева) и выдаёт фразу о ракурсе."""
     CATEGORY = "cadbos/object"
     FUNCTION = "run"
-    RETURN_TYPES = ("IMAGE", "STRING", "STRING")
-    RETURN_NAMES = ("image", "text", "info")
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("image", "text", "info", "camera")
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -118,10 +132,18 @@ class ObjectClayView:
             "simplify": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.1,
                                    "tooltip": "Упростить модель до грубого блока, чтобы Qwen брал "
                                               "из неё только позу, а не форму. 0 — точная модель."}),
+            "elevation": (["eye-level shot", "elevated shot", "high-angle shot", "low-angle shot"], {
+                "default": "elevated shot",
+                "tooltip": "Высота камеры для LoRA. Для фото интерьера обычно elevated shot."}),
+            "distance": (["medium shot", "close-up", "wide shot"], {"default": "medium shot"}),
+            "mirror_lr": ("BOOLEAN", {
+                "default": False,
+                "tooltip": "Поменять left/right в промпте LoRA, если поворот получается зеркальным."}),
         }}
 
     def run(self, depth, mask, view, relief, depth_near_is_bright,
-            view_text="", view_side=None, view_dir=None, simplify=0.0):
+            view_text="", view_side=None, view_dir=None, simplify=0.0,
+            elevation="elevated shot", distance="medium shot", mirror_lr=False):
         m = mask.float()
         if m.dim() == 3:
             m = m.amax(dim=0)
@@ -131,7 +153,7 @@ class ObjectClayView:
         obj = (m > 0.5).float()
         bb = _bbox(obj)
         if bb is None:
-            return (img[None], "", "маска пустая")
+            return (img[None], "", "маска пустая", "")
         size = float(max(bb[2] - bb[0], bb[3] - bb[1]))
 
         d = depth[0].float().to(dev)
@@ -168,7 +190,7 @@ class ObjectClayView:
         img = img * (1 - a) + shade[..., None] * a
 
         if view == "none":
-            return (img[None], "", "ракурс: без фразы (только глиняная модель)")
+            return (img[None], "", "ракурс: без фразы (только глиняная модель)", "")
         if view != "auto":
             key, src = view, "вручную"
         elif view_side is not None or view_dir is not None:
@@ -179,8 +201,12 @@ class ObjectClayView:
             key = _parse_view(view_text)
             src = f"по ответу VLM '{str(view_text).strip()}'"
         if key is None:
-            return (img[None], "", f"ракурс не определён ({src}) — без фразы")
+            return (img[None], "", f"ракурс не определён ({src}) — без фразы", "")
         text = (f"Required view of the result: the object is {VIEWS[key]}. "
                 f"In the gray clay model, lighter parts are closer to the "
                 f"camera and darker parts are farther away.")
-        return (img[None], text, f"ракурс: {key} ({src})")
+        az = AZIMUTH[key]
+        if mirror_lr:
+            az = az.replace("left", "@").replace("right", "left").replace("@", "right")
+        camera = f"<sks> {az} {elevation} {distance}"
+        return (img[None], text, f"ракурс: {key} ({src}); камера: {camera}", camera)
