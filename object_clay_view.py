@@ -89,15 +89,13 @@ def _combine_view(side_text, dir_text):
     direction = _last_key(d, [("left", ["left"]), ("right", ["right"]),
                               ("away", ["away"]),
                               ("camera", ["camera", "toward the viewer", "towards the viewer"])])
+    if direction == "away":      # перед смотрит от камеры — видна спинка
+        return "back"
+    if direction == "camera":    # перед смотрит в камеру — виден перед
+        return "front"
     if direction in ("left", "right"):
         return f"{side}-{direction}" if side else f"facing-{direction}"
-    if side:                 # при противоречии главный — ответ о стороне
-        return side
-    if direction == "away":
-        return "back"
-    if direction == "camera":
-        return "front"
-    return None
+    return side
 
 
 class ObjectClayView:
