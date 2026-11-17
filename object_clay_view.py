@@ -59,10 +59,16 @@ def _last_key(text, table):
     return best
 
 
+def _after_answer(text):
+    """Если модель написала 'ANSWER: ...', оставить только то, что после последнего 'answer'."""
+    i = text.rfind("answer")
+    return text[i + len("answer"):] if i >= 0 else text
+
+
 def _combine_view(side_text, dir_text):
     """Ответ «какая сторона видна» + ответ «куда смотрит перед» -> ключ VIEWS."""
-    s = str(side_text or "").lower()
-    d = str(dir_text or "").lower()
+    s = _after_answer(str(side_text or "").lower())
+    d = _after_answer(str(dir_text or "").lower())
     for phrase in ("away from the camera", "away from the viewer", "away from us"):
         d = d.replace(phrase, "away")
     side = _last_key(s, [("back", ["back", "behind"]), ("front", ["front"])])
