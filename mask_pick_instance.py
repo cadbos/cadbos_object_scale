@@ -181,18 +181,31 @@ class MaskPickInstance:
                                      "tooltip": "Режим window: предметы, чья доля в окне меньше "
                                                 "лучшей не больше чем на это значение, считаются "
                                                 "равными; из них берётся ближайший к камере."}),
+            "overlap_min": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05,
+                                      "tooltip": "Режим overlap: если найденный предмет покрывает "
+                                                 "меньше этой доли reference, взять саму маску "
+                                                 "reference. 0 — отключено."}),
         }}
 
     def run(self, mask, mode, index, point_x, point_y, separate, min_fraction,
             depth=None, reference=None, depth_near_is_bright=True, attach=32,
-            window_tol=0.15):
+            window_tol=0.15, overlap_min=0.0):
         m = mask.float()
         if m.dim() == 3:
             m = m.amax(dim=0)
         H, W = m.shape
         a = (m > 0.5).cpu().numpy()
         to_t = lambda x: torch.from_numpy(x.astype(np.float32))[None].to(mask.device)
+        ref = None
+        if reference is not None:
+            r = reference.float().to(m.device)
+            if r.dim() == 3:
+                r = r.amax(dim=0)
+            ref = (_resize_mask(r, H, W) > 0.5).cpu().numpy()
+        use_ref = mode == "overlap" and overlap_min > 0 and ref is not None and ref.any()
         if not a.any():
+            if use_ref:
+                return (to_t(ref), to_t(a), "ничего не найдено — взята маска reference")
             return (to_t(a), to_t(a), "маска пустая")
         dep = None
         if depth is not None:
@@ -203,13 +216,14 @@ class MaskPickInstance:
             if not depth_near_is_bright:
                 d = 1.0 - d
             dep = d.cpu().numpy()
-        ref = None
-        if reference is not None:
-            r = reference.float().to(m.device)
-            if r.dim() == 3:
-                r = r.amax(dim=0)
-            ref = (_resize_mask(r, H, W) > 0.5).cpu().numpy()
         sel, others, info = _pick(a, mode, index, float(point_x), float(point_y),
                                   int(separate), float(min_fraction), dep, ref,
                                   attach=int(attach), window_tol=float(window_tol))
+        if use_ref:
+            cover = float((sel & ref).sum()) / float(ref.sum())
+            if cover < float(overlap_min):
+                sel = ref.copy()
+                others = a & ~sel
+                info += (f"\nвыбранный предмет покрывает {100 * cover:.0f}% reference "
+                         f"(< {100 * float(overlap_min):.0f}%) — взята маска reference")
         return (to_t(sel), to_t(others), info)
