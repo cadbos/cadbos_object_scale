@@ -94,7 +94,9 @@ def _combine_view(side_text, dir_text):
     if direction == "camera":    # перед смотрит в камеру — виден перед
         return "front"
     if direction in ("left", "right"):
-        return f"{side}-{direction}" if side else f"facing-{direction}"
+        if side == "front":
+            return f"front-{direction}"
+        return f"facing-{direction}"   # «back» или нет ответа — профиль, ошибка менее заметна
     return side
 
 
