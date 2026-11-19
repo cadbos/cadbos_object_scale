@@ -212,11 +212,15 @@ class MaskPickInstance:
                                      "tooltip": "Резать касающиеся предметы по перепаду глубины "
                                                 "(нужен вход depth). 0 — выключено. Меньше — режет "
                                                 "чаще, больше — только по резким перепадам."}),
+            "merge_depth": ("FLOAT", {"default": 0.05, "min": 0.0, "max": 0.5, "step": 0.01,
+                                      "tooltip": "Склеивать куски одного предмета, разрезанного "
+                                                 "другим (спинка над столом и ножки под ним), "
+                                                 "если их глубина отличается не больше этого."}),
         }}
 
     def run(self, mask, mode, index, point_x, point_y, separate, min_fraction,
             depth=None, reference=None, depth_near_is_bright=True, attach=32,
-            window_tol=0.15, overlap_min=0.0, depth_edge=0.0):
+            window_tol=0.15, overlap_min=0.0, depth_edge=0.0, merge_depth=0.05):
         m = mask.float()
         if m.dim() == 3:
             m = m.amax(dim=0)
@@ -246,7 +250,7 @@ class MaskPickInstance:
         sel, others, info = _pick(a, mode, index, float(point_x), float(point_y),
                                   int(separate), float(min_fraction), dep, ref,
                                   attach=int(attach), window_tol=float(window_tol),
-                                  depth_edge=float(depth_edge))
+                                  depth_edge=float(depth_edge), depth_gap=float(merge_depth))
         if use_ref:
             cover = float((sel & ref).sum()) / float(ref.sum())
             if cover < float(overlap_min):
