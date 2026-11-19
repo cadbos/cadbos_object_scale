@@ -20,6 +20,7 @@ from .mask_smooth_edge import MaskSmoothEdge
 from .mask_window import MaskWindow
 from .window_preview import WindowPreview
 from .mask_parts_in_front import MaskPartsInFront
+from .mask_amodal_extend import MaskAmodalExtend
 
 
 NODE_CLASS_MAPPINGS = {
@@ -47,6 +48,7 @@ NODE_CLASS_MAPPINGS = {
     "MaskWindow": MaskWindow,
     "WindowPreview": WindowPreview,
     "MaskPartsInFront": MaskPartsInFront,
+    "MaskAmodalExtend": MaskAmodalExtend,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "ObjectScalePlacer": "Object Scale Placer (cadbos)",
@@ -73,6 +75,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MaskWindow": "Mask Window",
     "WindowPreview": "Window Preview",
     "MaskPartsInFront": "Mask Parts In Front",
+    "MaskAmodalExtend": "Mask Amodal Extend",
 }
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
