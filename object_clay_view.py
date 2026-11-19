@@ -79,25 +79,28 @@ def _after_answer(text):
     return text[i + len("answer"):] if i >= 0 else text
 
 
-def _combine_view(side_text, dir_text):
-    """Ответ «какая сторона видна» + ответ «куда смотрит перед» -> ключ VIEWS."""
-    s = _after_answer(str(side_text or "").lower())
-    d = _after_answer(str(dir_text or "").lower())
+def _combine_view(depth_text, horiz_text):
+    """Ответ «перед к камере / от камеры / вбок» + ответ «влево / вправо / прямо» -> ключ VIEWS."""
+    s = _after_answer(str(depth_text or "").lower())
+    d = _after_answer(str(horiz_text or "").lower())
     for phrase in ("away from the camera", "away from the viewer", "away from us"):
-        d = d.replace(phrase, "away")
-    side = _last_key(s, [("back", ["back", "behind"]), ("front", ["front"])])
-    direction = _last_key(d, [("left", ["left"]), ("right", ["right"]),
-                              ("away", ["away"]),
-                              ("camera", ["camera", "toward the viewer", "towards the viewer"])])
-    if direction == "away":      # перед смотрит от камеры — видна спинка
-        return "back"
-    if direction == "camera":    # перед смотрит в камеру — виден перед
+        s = s.replace(phrase, "away")
+    depth = _last_key(s, [("camera", ["camera", "toward"]),
+                          ("away", ["away"]),
+                          ("side", ["sideways", "profile"])])
+    horiz = _last_key(d, [("left", ["left"]), ("right", ["right"]),
+                          ("straight", ["straight"])])
+    if horiz in ("left", "right"):
+        if depth == "camera":
+            return f"front-{horiz}"
+        if depth == "away":
+            return f"back-{horiz}"
+        return f"facing-{horiz}"
+    if depth == "camera":
         return "front"
-    if direction in ("left", "right"):
-        if side == "front":
-            return f"front-{direction}"
-        return f"facing-{direction}"   # «back» или нет ответа — профиль, ошибка менее заметна
-    return side
+    if depth == "away":
+        return "back"
+    return None
 
 
 class ObjectClayView:
