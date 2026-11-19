@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 
-from .common import _resize_mask, _bbox, _draw_rect
+from .common import _resize_mask, _bbox, _draw_rect, _blur
 
 
 class ObjectContextCrop:
@@ -25,9 +25,12 @@ class ObjectContextCrop:
                              "tooltip": "Длинная сторона результата, px."}),
             "thickness": ("INT", {"default": 4, "min": 1, "max": 32}),
             "color": (["red", "green", "blue"], {"default": "red"}),
+            "dim": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05,
+                              "tooltip": "Насколько приглушить всё вокруг объекта (серым). "
+                                         "0 — без изменений, 1 — только сам объект на сером."}),
         }}
 
-    def run(self, image, mask, context, size, thickness, color):
+    def run(self, image, mask, context, size, thickness, color, dim=0.0):
         img = image[0].float()[..., :3]
         H, W, _ = img.shape
         dev = img.device
@@ -39,6 +42,12 @@ class ObjectContextCrop:
         if bb is None:
             return (image, "маска пустая — передана вся сцена")
         x0, y0, x1, y1 = bb
+        if dim > 0:  # приглушить всё, кроме объекта (с небольшим запасом по краю)
+            k = max(1, int(round(0.02 * max(x1 - x0, y1 - y0))))
+            near = (_blur((m > 0.5).float(), k) > 0.01).float()
+            soft = _blur(near, k)[..., None]
+            gray = img.mean(dim=-1, keepdim=True).expand_as(img) * 0.5 + 0.25
+            img = img * soft + (img * (1 - dim) + gray * dim) * (1 - soft)
         side = max(x1 - x0, y1 - y0) * float(context)
         cw, ch = int(round(min(W, side))), int(round(min(H, side)))
         cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
