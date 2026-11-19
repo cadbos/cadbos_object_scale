@@ -5,7 +5,7 @@ import scipy.ndimage as ndi
 from .common import _resize_mask
 
 
-def _split(a, separate, dep, depth_gap):
+def _split(a, separate, dep, depth_gap, depth_weight=0.0):
     """Делит маску на отдельные предметы. Касающиеся предметы разделяются
     эрозией на separate px; каждый пиксель возвращается ближайшему «ядру»
     внутри своего связного куска."""
@@ -20,8 +20,22 @@ def _split(a, separate, dep, depth_gap):
             n += 1
             lab[sl][c] = n
             continue
-        _, (iy, ix) = ndi.distance_transform_edt(cl == 0, return_indices=True)
-        part = cl[iy, ix]
+        if dep is not None and depth_weight > 0:
+            # пиксель отходит к ядру, ближайшему и по положению, и по глубине:
+            # ножка дальнего стула не уйдёт к соседу, который ближе к камере
+            dsub = dep[sl]
+            scale = float(np.hypot(*a.shape)) * float(depth_weight)
+            best = np.full(c.shape, np.inf)
+            part = np.zeros(c.shape, dtype=np.int32)
+            for i in range(1, cn + 1):
+                ci = cl == i
+                cost = ndi.distance_transform_edt(~ci) + scale * np.abs(dsub - np.median(dsub[ci]))
+                better = cost < best
+                best[better] = cost[better]
+                part[better] = i
+        else:
+            _, (iy, ix) = ndi.distance_transform_edt(cl == 0, return_indices=True)
+            part = cl[iy, ix]
         lab[sl][c] = part[c] + n
         n += cn
     # куски одного предмета, разрезанного другим (спинка над столом и ножки
@@ -50,9 +64,9 @@ def _split(a, separate, dep, depth_gap):
 
 
 def _pick(a, mode, index, px, py, separate, min_fraction, dep, ref,
-          depth_gap=0.05, attach=0, window_tol=0.15):
+          depth_gap=0.05, attach=0, window_tol=0.15, depth_weight=0.0):
     H, W = a.shape
-    lab = _split(a, separate, dep, depth_gap)
+    lab = _split(a, separate, dep, depth_gap, depth_weight)
     ids = [int(i) for i in np.unique(lab) if i > 0]
     st = []
     for i in ids:
@@ -185,11 +199,15 @@ class MaskPickInstance:
                                       "tooltip": "Режим overlap: если найденный предмет покрывает "
                                                  "меньше этой доли reference, взять саму маску "
                                                  "reference. 0 — отключено."}),
+            "depth_weight": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 10.0, "step": 0.5,
+                                       "tooltip": "Учитывать глубину при разделении касающихся "
+                                                  "предметов (нужен вход depth). 0 — только по "
+                                                  "расстоянию; 3 — ножки не уходят к соседу."}),
         }}
 
     def run(self, mask, mode, index, point_x, point_y, separate, min_fraction,
             depth=None, reference=None, depth_near_is_bright=True, attach=32,
-            window_tol=0.15, overlap_min=0.0):
+            window_tol=0.15, overlap_min=0.0, depth_weight=0.0):
         m = mask.float()
         if m.dim() == 3:
             m = m.amax(dim=0)
@@ -218,7 +236,8 @@ class MaskPickInstance:
             dep = d.cpu().numpy()
         sel, others, info = _pick(a, mode, index, float(point_x), float(point_y),
                                   int(separate), float(min_fraction), dep, ref,
-                                  attach=int(attach), window_tol=float(window_tol))
+                                  attach=int(attach), window_tol=float(window_tol),
+                                  depth_weight=float(depth_weight))
         if use_ref:
             cover = float((sel & ref).sum()) / float(ref.sum())
             if cover < float(overlap_min):
