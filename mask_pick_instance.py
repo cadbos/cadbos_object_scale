@@ -5,41 +5,50 @@ import scipy.ndimage as ndi
 from .common import _resize_mask
 
 
-def _split(a, separate, dep, depth_gap, depth_weight=0.0):
-    """Делит маску на отдельные предметы. Касающиеся предметы разделяются
-    эрозией на separate px; каждый пиксель возвращается ближайшему «ядру»
-    внутри своего связного куска."""
+def _grow_labels(lab, allowed, max_iter=2000):
+    """Растит метки внутри allowed, не перескакивая через запрещённые пиксели."""
+    lab = lab.copy()
+    for _ in range(max_iter):
+        free = allowed & (lab == 0)
+        if not free.any():
+            break
+        grown = ndi.grey_dilation(lab, size=(3, 3))
+        new = free & (grown > 0)
+        if not new.any():
+            break
+        lab[new] = grown[new]
+    return lab
+
+
+def _split(a, separate, dep, depth_gap, depth_edge=0.0):
+    """Делит маску на отдельные предметы.
+    depth_edge > 0: сначала режет маску по резким перепадам глубины
+    (граница между ближним и дальним предметом), затем растит каждый предмет
+    от его «ядра», не переходя через эти разрезы."""
     orig, n0 = ndi.label(a)
     lab = np.zeros(a.shape, dtype=np.int32)
     n = 0
     for sl_i, sl in enumerate(ndi.find_objects(orig), start=1):
         c = orig[sl] == sl_i
-        core = ndi.binary_erosion(c, iterations=int(separate)) if separate > 0 else c
+        cut = c
+        if dep is not None and depth_edge > 0:
+            g = ndi.gaussian_gradient_magnitude(dep[sl].astype(np.float32), 1.0)
+            cut = c & ~(g > float(depth_edge))
+        core = ndi.binary_erosion(cut, iterations=int(separate)) if separate > 0 else cut
         cl, cn = ndi.label(core)
         if cn <= 1:
             n += 1
             lab[sl][c] = n
             continue
-        if dep is not None and depth_weight > 0:
-            # пиксель отходит к ядру, ближайшему и по положению, и по глубине:
-            # ножка дальнего стула не уйдёт к соседу, который ближе к камере
-            dsub = dep[sl]
-            scale = float(np.hypot(*a.shape)) * float(depth_weight)
-            best = np.full(c.shape, np.inf)
-            part = np.zeros(c.shape, dtype=np.int32)
-            for i in range(1, cn + 1):
-                ci = cl == i
-                cost = ndi.distance_transform_edt(~ci) + scale * np.abs(dsub - np.median(dsub[ci]))
-                better = cost < best
-                best[better] = cost[better]
-                part[better] = i
+        if cut is not c:
+            part = _grow_labels(cl, cut)          # по связности, без перехода через разрезы
+            part = _grow_labels(part, c)          # пиксели самих разрезов — ближайшему
         else:
             _, (iy, ix) = ndi.distance_transform_edt(cl == 0, return_indices=True)
             part = cl[iy, ix]
         lab[sl][c] = part[c] + n
         n += cn
-    # куски одного предмета, разрезанного другим (спинка над столом и ножки
-    # под ним): по горизонтали друг над другом и на одной глубине — склеить
+    # куски одного предмета, разрезанного другим: друг над другом и на одной глубине — склеить
     if dep is not None and n > 1:
         info = {}
         for i in range(1, n + 1):
@@ -64,9 +73,9 @@ def _split(a, separate, dep, depth_gap, depth_weight=0.0):
 
 
 def _pick(a, mode, index, px, py, separate, min_fraction, dep, ref,
-          depth_gap=0.05, attach=0, window_tol=0.15, depth_weight=0.0):
+          depth_gap=0.05, attach=0, window_tol=0.15, depth_edge=0.0):
     H, W = a.shape
-    lab = _split(a, separate, dep, depth_gap, depth_weight)
+    lab = _split(a, separate, dep, depth_gap, depth_edge)
     ids = [int(i) for i in np.unique(lab) if i > 0]
     st = []
     for i in ids:
@@ -199,15 +208,15 @@ class MaskPickInstance:
                                       "tooltip": "Режим overlap: если найденный предмет покрывает "
                                                  "меньше этой доли reference, взять саму маску "
                                                  "reference. 0 — отключено."}),
-            "depth_weight": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 10.0, "step": 0.5,
-                                       "tooltip": "Учитывать глубину при разделении касающихся "
-                                                  "предметов (нужен вход depth). 0 — только по "
-                                                  "расстоянию; 3 — ножки не уходят к соседу."}),
+            "depth_edge": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 0.2, "step": 0.002,
+                                     "tooltip": "Резать касающиеся предметы по перепаду глубины "
+                                                "(нужен вход depth). 0 — выключено. Меньше — режет "
+                                                "чаще, больше — только по резким перепадам."}),
         }}
 
     def run(self, mask, mode, index, point_x, point_y, separate, min_fraction,
             depth=None, reference=None, depth_near_is_bright=True, attach=32,
-            window_tol=0.15, overlap_min=0.0, depth_weight=0.0):
+            window_tol=0.15, overlap_min=0.0, depth_edge=0.0):
         m = mask.float()
         if m.dim() == 3:
             m = m.amax(dim=0)
@@ -237,7 +246,7 @@ class MaskPickInstance:
         sel, others, info = _pick(a, mode, index, float(point_x), float(point_y),
                                   int(separate), float(min_fraction), dep, ref,
                                   attach=int(attach), window_tol=float(window_tol),
-                                  depth_weight=float(depth_weight))
+                                  depth_edge=float(depth_edge))
         if use_ref:
             cover = float((sel & ref).sum()) / float(ref.sum())
             if cover < float(overlap_min):
