@@ -1,22 +1,28 @@
-matplotlib
-pydantic==2.10.6
-gradio==5.9.0
-onnxruntime
-rembg
-accelerate==1.8.1
-numpy>=1.24
-einops
-pandas
-pillow
-huggingface_hub>=0.23
-lightning==2.2
-scipy
-torch
-torchmetrics
-torchvision
-tqdm
-transformers
-scikit-learn
-opencv-python
-timm
-bpy==4.2
+# matplotlib
+# pydantic==2.10.6
+# gradio==5.9.0
+# onnxruntime
+# rembg
+# accelerate==1.8.1
+# numpy>=1.24
+numpy==2.4.6
+# einops
+# pandas
+# pillow
+pillow==12.3.0
+# huggingface_hub>=0.23
+huggingface_hub==0.36.2
+# lightning==2.2
+# scipy
+scipy==1.18.0
+# torch
+torch==2.12.1
+# torchmetrics
+# torchvision
+torchvision==0.27.1
+# tqdm
+# transformers
+# scikit-learn
+# opencv-python
+# timm
+# bpy==4.2
