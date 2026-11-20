@@ -2,6 +2,7 @@ import os
 import sys
 import types
 import importlib
+import importlib.util
 
 import numpy as np
 import torch
@@ -33,6 +34,24 @@ def _is_oa(name):
     return name in _OA_NAMES or any(name.startswith(n + ".") for n in _OA_NAMES)
 
 
+def _preload_pkg(name):
+    """Регистрирует пакет репозитория (utils, vggt) под его именем явно.
+    Иначе Python возьмёт одноимённый пакет ComfyUI: папка utils в репозитории
+    без __init__.py, а «обычный» пакет всегда побеждает такую папку."""
+    pkg_dir = os.path.join(_OA_DIR, name)
+    init = os.path.join(pkg_dir, "__init__.py")
+    if os.path.exists(init):
+        spec = importlib.util.spec_from_file_location(name, init,
+                                                      submodule_search_locations=[pkg_dir])
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
+    else:
+        mod = types.ModuleType(name)
+        mod.__path__ = [pkg_dir]
+        sys.modules[name] = mod
+
+
 def _load():
     """Загружает Orient Anything V2 один раз. Модули репозитория импортируются
     в изоляции, чтобы его пакет utils не столкнулся с utils самого ComfyUI."""
@@ -50,6 +69,8 @@ def _load():
             sys.modules["rembg"] = types.ModuleType("rembg")
     sys.path.insert(0, _OA_DIR)
     try:
+        _preload_pkg("utils")
+        _preload_pkg("vggt")
         vt = importlib.import_module("vision_tower")
         au = importlib.import_module("utils.app_utils")
         pa = importlib.import_module("utils.paths")
