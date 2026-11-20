@@ -92,6 +92,7 @@ def _load():
              and torch.cuda.get_device_capability()[0] >= 8 else torch.float16)
     model = vt.VGGT_OriAny_Ref(out_dim=900, dtype=dtype, nopretrain=True)
     model.load_state_dict(torch.load(ckpt, map_location="cpu"))
+    model = model.to(dtype)   # bf16: в памяти 2.5 ГБ вместо 5
     model.eval()
     _STATE.update(model=model, au=au)
     return model, au
@@ -112,7 +113,7 @@ def _infer(pil):
     model, au = _load()
     import comfy.model_management as mm
     dev = mm.get_torch_device()
-    mm.free_memory(6 * 1024 ** 3, dev)   # освободить место: модель занимает ~5 ГБ
+    mm.free_memory(4 * 1024 ** 3, dev)   # модели в bf16 нужно ~3 ГБ с запасом
     model.to(dev)
     try:
         with torch.no_grad():
