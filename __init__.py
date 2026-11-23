@@ -22,6 +22,7 @@ from .window_preview import WindowPreview
 from .mask_parts_in_front import MaskPartsInFront
 from .mask_amodal_extend import MaskAmodalExtend
 from .object_orient_anything import ObjectOrientAnything, ObjectOrientPick
+from .mask_drop_unchanged import MaskDropUnchanged
 
 
 NODE_CLASS_MAPPINGS = {
@@ -52,6 +53,7 @@ NODE_CLASS_MAPPINGS = {
     "MaskAmodalExtend": MaskAmodalExtend,
     "ObjectOrientAnything": ObjectOrientAnything,
     "ObjectOrientPick": ObjectOrientPick,
+    "MaskDropUnchanged": MaskDropUnchanged,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "ObjectScalePlacer": "Object Scale Placer (cadbos)",
@@ -81,6 +83,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MaskAmodalExtend": "Mask Amodal Extend",
     "ObjectOrientAnything": "Object Orient Anything",
     "ObjectOrientPick": "Object Orient Pick",
+    "MaskDropUnchanged": "Mask Drop Unchanged",
 }
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
