@@ -1,5 +1,3 @@
-import torch
-
 from .common import _resize_mask, _bbox
 
 
@@ -28,10 +26,15 @@ class MaskAmodalExtend:
             "min_occluded": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05,
                                        "tooltip": "Какая доля полосы должна быть закрыта."}),
             "depth_near_is_bright": ("BOOLEAN", {"default": True}),
+        },
+        "optional": {
+            "occluders": ("MASK", {"tooltip": "Другие найденные предметы (узел 258). Если "
+                                              "подключено, преградой считаются только они, "
+                                              "а не пол."}),
         }}
 
     def run(self, mask, depth, reference_mask, band, margin, min_occluded,
-            depth_near_is_bright):
+            depth_near_is_bright, occluders=None):
         m = mask.float()
         if m.dim() == 3:
             m = m.amax(dim=0)
@@ -58,7 +61,14 @@ class MaskAmodalExtend:
             return (obj[None], "не удалось оценить глубину низа объекта")
         d_foot = float(foot_vals.median())
         strip = d[y1:min(H, y1 + int(band)), x0:x1]
-        occ = float((strip > d_foot + float(margin)).float().mean())
+        near = strip > d_foot + float(margin)
+        if occluders is not None:   # преграда — только найденный предмет, не пол
+            o = occluders.float().to(dev)
+            if o.dim() == 3:
+                o = o.amax(dim=0)
+            o = _resize_mask(o, H, W) > 0.5
+            near = near & o[y1:min(H, y1 + int(band)), x0:x1]
+        occ = float(near.float().mean())
         if occ < float(min_occluded):
             return (obj[None], f"низ объекта виден (закрыто {100 * occ:.0f}% полосы) — "
                                f"без изменений")
