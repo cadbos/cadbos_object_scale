@@ -20,7 +20,39 @@ def _grow_labels(lab, allowed, max_iter=2000):
     return lab
 
 
-def _split(a, separate, dep, depth_gap, depth_edge=0.0):
+def _merge_fragments(lab, dep, frag_ratio, depth_gap, min_contact=0.15):
+    """Мелкие куски, отрезанные от предмета (угол сиденья за спинкой), вернуть
+    соседу, с которым у куска самая длинная общая граница, если кусок намного
+    меньше соседа и близок к нему по глубине."""
+    changed = True
+    while changed:
+        changed = False
+        ids = [int(i) for i in np.unique(lab) if i > 0]
+        areas = {i: int((lab == i).sum()) for i in ids}
+        for i in sorted(ids, key=lambda k: areas[k]):
+            if areas[i] == 0:
+                continue
+            m = lab == i
+            ring = ndi.binary_dilation(m) & ~m
+            nb = lab[ring]
+            nb = nb[(nb > 0) & (nb != i)]
+            if len(nb) == 0:
+                continue
+            j = int(np.bincount(nb).argmax())
+            contact = float((nb == j).sum()) / float(max(1, ring.sum()))
+            if areas[i] >= frag_ratio * areas[j] or contact < min_contact:
+                continue
+            if dep is not None and abs(float(np.median(dep[m])) -
+                                       float(np.median(dep[lab == j]))) >= depth_gap:
+                continue
+            lab[m] = j
+            areas[j] += areas[i]
+            areas[i] = 0
+            changed = True
+    return lab
+
+
+def _split(a, separate, dep, depth_gap, depth_edge=0.0, frag_ratio=0.0):
     """Делит маску на отдельные предметы.
     depth_edge > 0: сначала режет маску по резким перепадам глубины
     (граница между ближним и дальним предметом), затем растит каждый предмет
@@ -48,6 +80,8 @@ def _split(a, separate, dep, depth_gap, depth_edge=0.0):
             part = cl[iy, ix]
         lab[sl][c] = part[c] + n
         n += cn
+    if frag_ratio > 0 and n > 1:
+        lab = _merge_fragments(lab, dep, frag_ratio, depth_gap if dep is not None else 1.0)
     # куски одного предмета, разрезанного другим: друг над другом и на одной глубине — склеить
     if dep is not None and n > 1:
         info = {}
@@ -73,9 +107,9 @@ def _split(a, separate, dep, depth_gap, depth_edge=0.0):
 
 
 def _pick(a, mode, index, px, py, separate, min_fraction, dep, ref,
-          depth_gap=0.05, attach=0, window_tol=0.15, depth_edge=0.0):
+          depth_gap=0.05, attach=0, window_tol=0.15, depth_edge=0.0, frag_ratio=0.0):
     H, W = a.shape
-    lab = _split(a, separate, dep, depth_gap, depth_edge)
+    lab = _split(a, separate, dep, depth_gap, depth_edge, frag_ratio)
     ids = [int(i) for i in np.unique(lab) if i > 0]
     st = []
     for i in ids:
@@ -216,11 +250,15 @@ class MaskPickInstance:
                                       "tooltip": "Склеивать куски одного предмета, разрезанного "
                                                  "другим (спинка над столом и ножки под ним), "
                                                  "если их глубина отличается не больше этого."}),
+            "merge_fragments": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05,
+                                          "tooltip": "Возвращать предмету отрезанные от него мелкие "
+                                                     "куски (меньше этой доли соседа). 0 — выключено."}),
         }}
 
     def run(self, mask, mode, index, point_x, point_y, separate, min_fraction,
             depth=None, reference=None, depth_near_is_bright=True, attach=32,
-            window_tol=0.15, overlap_min=0.0, depth_edge=0.0, merge_depth=0.05):
+            window_tol=0.15, overlap_min=0.0, depth_edge=0.0, merge_depth=0.05,
+            merge_fragments=0.0):
         m = mask.float()
         if m.dim() == 3:
             m = m.amax(dim=0)
@@ -250,7 +288,8 @@ class MaskPickInstance:
         sel, others, info = _pick(a, mode, index, float(point_x), float(point_y),
                                   int(separate), float(min_fraction), dep, ref,
                                   attach=int(attach), window_tol=float(window_tol),
-                                  depth_edge=float(depth_edge), depth_gap=float(merge_depth))
+                                  depth_edge=float(depth_edge), depth_gap=float(merge_depth),
+                                  frag_ratio=float(merge_fragments))
         if use_ref:
             cover = float((sel & ref).sum()) / float(ref.sum())
             if cover < float(overlap_min):
