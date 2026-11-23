@@ -168,6 +168,10 @@ def _pick(a, mode, index, px, py, separate, min_fraction, dep, ref,
         else:
             k = max(range(len(st)), key=lambda j: st[j]["area"])
     sel = lab == st[k]["id"]
+    if mode == "overlap_all" and ref is not None:   # все куски, лежащие на месте вставки
+        extra = [s["id"] for s in st if s["ov"] >= 0.5 * s["area"]]
+        if extra:
+            sel = sel | np.isin(lab, extra)
     attached = 0
     if attach > 0:
         kept = np.isin(lab, [s["id"] for s in st])
@@ -207,7 +211,7 @@ class MaskPickInstance:
         return {"required": {
             "mask": ("MASK", {"tooltip": "Все найденные предметы (GroundingDINO + SAM)."}),
             "mode": (["nearest", "largest", "leftmost", "rightmost", "center",
-                      "index", "point", "overlap", "window"], {
+                      "index", "point", "overlap", "window", "overlap_all"], {
                 "default": "nearest",
                 "tooltip": "nearest — ближайший к камере; largest — самый крупный; "
                            "leftmost / rightmost / center — по положению в кадре; "
@@ -271,7 +275,8 @@ class MaskPickInstance:
             if r.dim() == 3:
                 r = r.amax(dim=0)
             ref = (_resize_mask(r, H, W) > 0.5).cpu().numpy()
-        use_ref = mode == "overlap" and overlap_min > 0 and ref is not None and ref.any()
+        use_ref = (mode in ("overlap", "overlap_all") and overlap_min > 0
+                   and ref is not None and ref.any())
         if not a.any():
             if use_ref:
                 return (to_t(ref), to_t(a), "ничего не найдено — взята маска reference")
