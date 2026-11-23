@@ -26,9 +26,13 @@ class MaskDropUnchanged:
                                                "чтобы считаться неизменным."}),
             "min_area": ("INT", {"default": 64, "min": 0, "max": 100000,
                                  "tooltip": "Мелкие неизменные пятна (px) не трогать."}),
+        },
+        "optional": {
+            "only_in": ("MASK", {"tooltip": "Другие найденные предметы (узел 258): убирать "
+                                            "только куски, которые в основном лежат на них."}),
         }}
 
-    def run(self, mask, image, clean, tolerance, min_area):
+    def run(self, mask, image, clean, tolerance, min_area, only_in=None):
         m = mask.float()
         if m.dim() == 3:
             m = m.amax(dim=0)
@@ -50,12 +54,20 @@ class MaskDropUnchanged:
         lab, n = ndi.label(same)
         outside = ~obj
         edge = ndi.binary_dilation(outside, iterations=2)
+        oi = None
+        if only_in is not None:
+            o = only_in.float().to(dev)
+            if o.dim() == 3:
+                o = o.amax(dim=0)
+            oi = (_resize_mask(o, H, W) > 0.5).cpu().numpy()
         drop = np.zeros_like(obj)
         removed = 0
         for i in range(1, n + 1):
             c = lab == i
             if int(c.sum()) < int(min_area) or not (c & edge).any():
                 continue
+            if oi is not None and float((c & oi).sum()) < 0.5 * float(c.sum()):
+                continue   # не лежит на другом найденном предмете — это часть нового объекта
             drop |= c
             removed += int(c.sum())
         out = obj & ~drop
