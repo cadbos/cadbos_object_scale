@@ -210,10 +210,12 @@ class ObjectScalePlacer:
         ox0, oy0, ox1, oy1 = bb_old
         ow, oh = ox1 - ox0, oy1 - oy0
         # низ объекта за краем кадра: опора на пол не видна — вписывать по ширине от верха
-        if (oy1 >= H - 2 and anchor == "bottom" and fit in ("contain", "height")
-                and ox0 > 2 and ox1 < W - 2):
+        bottom_cut = oy1 >= H - 2
+        if bottom_cut and anchor == "bottom" and fit in ("contain", "height"):
             anchor = "top"
             fit = "width"
+        # старый объект обрезан низом кадра — новый тоже может уходить за нижний край
+        overflow = bottom_cut and anchor == "top"
         at_edge = ox0 <= 2 or oy0 <= 2 or ox1 >= W - 2 or oy1 >= H - 2
         if edge_box and at_edge and mode == "frame" and pad_left == 0 and pad_right == 0:
             fit = "box"  # объект обрезан краем кадра — его пропорции неизвестны
@@ -299,7 +301,7 @@ class ObjectScalePlacer:
                 s_auto = min(ow / rw, oh / rh)
             s = s_auto * factor
             nw, nh = rw * s, rh * s
-        k = min(1.0, W / nw, H / nh)  # не больше кадра
+        k = min(1.0, W / nw) if overflow else min(1.0, W / nw, H / nh)  # не больше кадра
         nw, nh = max(2, int(round(nw * k))), max(2, int(round(nh * k)))
 
         if h_anchor == "center":  # объект продолжен дорисовкой — держать его видимый край
@@ -324,8 +326,9 @@ class ObjectScalePlacer:
         nx0 += int(offset_x)
         ny0 += int(offset_y)
         nx0 = max(0, min(W - nw, nx0))
-        ny0 = max(0, min(H - nh, ny0))
-        nx1, ny1 = nx0 + nw, ny0 + nh
+        ny0 = max(0, min(H - 2 if overflow else H - nh, ny0))
+        vh = min(nh, H - ny0)  # видимая высота: при overflow низ объекта обрезается краем кадра
+        nx1, ny1 = nx0 + nw, ny0 + vh
 
         # --- автосдвиг при столкновении с предметами на той же глубине
         shift_dx, coll_before, coll_after, shift_side = 0, 0, 0, "-"
@@ -351,6 +354,7 @@ class ObjectScalePlacer:
                                      align_corners=False)[0, 0]
                 foot = (foot > 0.5).float()
                 foot[:int(round(nh * (1.0 - collision_band)))] = 0
+                foot = foot[:vh]
                 # там, где объект этапа 1 уже касался предметов, касание допустимо
                 old_foot = old.clone()
                 old_foot[:max(0, int(round(oy1 - oh * collision_band)))] = 0
@@ -419,7 +423,7 @@ class ObjectScalePlacer:
         if drop_inner_protect and mode == "collage" and prot.sum() > 0:
             fp = torch.zeros((H, W), device=dev)
             fp[ny0:ny1, nx0:nx1] = (F.interpolate(rm_c[None, None], size=(nh, nw), mode="bilinear",
-                                    align_corners=False)[0, 0] > 0.5).float()
+                                    align_corners=False)[0, 0] > 0.5).float()[:vh]
             fp = _dilate(fp, 2).cpu().numpy() > 0.5
             p_np = prot.cpu().numpy() > 0.5
             lab, n = ndi.label(p_np)
@@ -494,16 +498,16 @@ class ObjectScalePlacer:
             antialias = nw < rw or nh < rh
             rc = F.interpolate(ref_c.permute(2, 0, 1)[None], size=(nh, nw),
                                mode="bicubic", align_corners=False,
-                               antialias=antialias)[0].permute(1, 2, 0).clamp(0, 1)
+                               antialias=antialias)[0].permute(1, 2, 0).clamp(0, 1)[:vh]
             am = F.interpolate(rm_c[None, None], size=(nh, nw), mode="bilinear",
-                               align_corners=False, antialias=antialias)[0, 0]
+                               align_corners=False, antialias=antialias)[0, 0][:vh]
             if soft_alpha:
                 am = am.clamp(0, 1)  # мягкий край из маски как есть
             else:
                 am = _blur((am > 0.5).float(), 1)  # мягкий край без сужения
             am = am * (1 - prot[ny0:ny1, nx0:nx1])
             hm = F.interpolate(hid_c[None, None], size=(nh, nw), mode="bilinear",
-                            align_corners=False)[0, 0]
+                            align_corners=False)[0, 0][:vh]
             hm = _blur((hm > 0.5).float(), 2) * (1 - prot[ny0:ny1, nx0:nx1])
             a2 = torch.maximum(am, hm)
             region = guide[ny0:ny1, nx0:nx1]
@@ -553,6 +557,8 @@ class ObjectScalePlacer:
                 f"доп. защита (предметы спереди): {extra_px} px; "
                 f"тень перенесена: {shadow_px} px; "
                 f"автосдвиг: {shift_dx:+d} px {shift_side} (наложение {coll_before} -> {coll_after} px)"
-                + ("; ВНИМАНИЕ: объект ограничен размером кадра" if k < 1.0 else ""))
+                + ("; ВНИМАНИЕ: объект ограничен размером кадра" if k < 1.0 else "")
+                + (f"\nстарый объект обрезан нижним краем кадра: новый поставлен от его верха, "
+                   f"за нижний край уходит {nh - vh} px" if overflow else ""))
         return (guide[None].clamp(0, 1), union[None], obj_mask[None],
                 prev[None].clamp(0, 1), info, prot[None])
