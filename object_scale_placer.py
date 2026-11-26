@@ -179,6 +179,11 @@ class ObjectScalePlacer:
                     "tooltip": "Если старый объект обрезан левым/правым краем кадра, новый может "
                                "уходить за этот край на такую долю своей ширины (сдвигом "
                                "offset_x или автосдвигом). 0 — не уходить (как раньше)."}),
+                "floor_keep": ("FLOAT", {
+                    "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "Старый объект обрезан нижним краем кадра (опора не видна), масштаб "
+                               "не 100%: 1 — на месте остаётся низ объекта (опора на пол), "
+                               "0 — верх (как раньше, объект «подвисает»), между — промежуточно."}),
             },
         }
 
@@ -194,7 +199,8 @@ class ObjectScalePlacer:
               cut_protect=False, cut_neighbors=False, neighbor_tolerance=0.15,
               fill_hidden=False, neighbor_depth=0.5, edge_box=False,
               pad_left=0, pad_right=0, drop_inner_protect=False,
-              edge_erode=0, decontaminate=False, soft_alpha=False, x_overflow=0.0):
+              edge_erode=0, decontaminate=False, soft_alpha=False, x_overflow=0.0,
+              floor_keep=1.0):
         img = scene[0].clone().float()
         H, W, _ = img.shape
         dev = img.device
@@ -216,9 +222,11 @@ class ObjectScalePlacer:
         ow, oh = ox1 - ox0, oy1 - oy0
         # низ объекта за краем кадра: опора на пол не видна — вписывать по ширине от верха
         bottom_cut = oy1 >= H - 2
+        floor_hidden = False  # опора на пол за нижним краем кадра
         if bottom_cut and anchor == "bottom" and fit in ("contain", "height"):
             anchor = "top"
             fit = "width"
+            floor_hidden = True
         # старый объект обрезан низом кадра — новый тоже может уходить за нижний край
         overflow = bottom_cut and anchor == "top"
         at_edge = ox0 <= 2 or oy0 <= 2 or ox1 >= W - 2 or oy1 >= H - 2
@@ -297,6 +305,7 @@ class ObjectScalePlacer:
         if fit == "box":  # рамка = рамка старого объекта, пропорции референса не важны
             s = factor
             nw, nh = ow * factor, oh * factor
+            nw_base, nh_base = ow, oh
         else:
             if fit == "height":
                 s_auto = oh / rh
@@ -306,8 +315,11 @@ class ObjectScalePlacer:
                 s_auto = min(ow / rw, oh / rh)
             s = s_auto * factor
             nw, nh = rw * s, rh * s
+            nw_base, nh_base = rw * s_auto, rh * s_auto  # размер при 100%
         k = min(1.0, W / nw) if overflow else min(1.0, W / nw, H / nh)  # не больше кадра
         nw, nh = max(2, int(round(nw * k))), max(2, int(round(nh * k)))
+        k_base = min(1.0, W / nw_base) if overflow else min(1.0, W / nw_base, H / nh_base)
+        nh_base = nh_base * k_base
 
         if h_anchor == "center":  # объект продолжен дорисовкой — держать его видимый край
             if pad_right > 0 and pad_left == 0:
@@ -326,6 +338,11 @@ class ObjectScalePlacer:
             ny0 = oy1 - nh
         elif anchor == "top":
             ny0 = oy0
+            if floor_hidden:
+                # опора за кадром: держать на месте низ объекта масштаба 100%
+                # (верх старого объекта + полная высота), а не его верх —
+                # иначе при уменьшении объект «подвисает» над полом
+                ny0 = int(round(oy0 + float(floor_keep) * (nh_base - nh)))
         else:
             ny0 = int(round((oy0 + oy1) / 2.0 - nh / 2.0))
         nx0 += int(offset_x)
@@ -575,7 +592,9 @@ class ObjectScalePlacer:
                 f"автосдвиг: {shift_dx:+d} px {shift_side} (наложение {coll_before} -> {coll_after} px)"
                 + ("; ВНИМАНИЕ: объект ограничен размером кадра" if k < 1.0 else "")
                 + (f"\nза краем кадра: {nw - (vx1 - vx0)} px по ширине" if vx1 - vx0 < nw else "")
-                + (f"\nстарый объект обрезан нижним краем кадра: новый поставлен от его верха, "
-                   f"за нижний край уходит {nh - vh} px" if overflow else ""))
+                + (f"\nстарый объект обрезан нижним краем кадра: опора за кадром "
+                   f"(floor_keep={floor_keep:.2f}), низ при 100% на y={oy0 + nh_base:.0f}; "
+                   f"за нижний край уходит {nh - vh} px" if floor_hidden else "")
+                + (f"\nза нижний край уходит {nh - vh} px" if overflow and not floor_hidden else ""))
         return (guide[None].clamp(0, 1), union[None], obj_mask[None],
                 prev[None].clamp(0, 1), info, prot[None])
