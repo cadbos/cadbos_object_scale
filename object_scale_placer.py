@@ -174,6 +174,11 @@ class ObjectScalePlacer:
                     "default": False,
                     "tooltip": "Брать край из reference_mask как есть (мягкий), а не делать "
                                "его резким. Для мягкой маски из Mask Smooth Edge."}),
+                "x_overflow": ("FLOAT", {
+                    "default": 0.0, "min": 0.0, "max": 0.9, "step": 0.05,
+                    "tooltip": "Если старый объект обрезан левым/правым краем кадра, новый может "
+                               "уходить за этот край на такую долю своей ширины (сдвигом "
+                               "offset_x или автосдвигом). 0 — не уходить (как раньше)."}),
             },
         }
 
@@ -189,7 +194,7 @@ class ObjectScalePlacer:
               cut_protect=False, cut_neighbors=False, neighbor_tolerance=0.15,
               fill_hidden=False, neighbor_depth=0.5, edge_box=False,
               pad_left=0, pad_right=0, drop_inner_protect=False,
-              edge_erode=0, decontaminate=False, soft_alpha=False):
+              edge_erode=0, decontaminate=False, soft_alpha=False, x_overflow=0.0):
         img = scene[0].clone().float()
         H, W, _ = img.shape
         dev = img.device
@@ -325,7 +330,11 @@ class ObjectScalePlacer:
             ny0 = int(round((oy0 + oy1) / 2.0 - nh / 2.0))
         nx0 += int(offset_x)
         ny0 += int(offset_y)
-        nx0 = max(0, min(W - nw, nx0))
+        # допустимый диапазон левого края: за край кадра — только со стороны, где старый обрезан
+        ovf = int(round(nw * float(x_overflow)))
+        lo_x = -ovf if ox0 <= 2 else 0
+        hi_x = W - nw + (ovf if ox1 >= W - 2 else 0)
+        nx0 = max(lo_x, min(hi_x, nx0))
         ny0 = max(0, min(H - 2 if overflow else H - nh, ny0))
         vh = min(nh, H - ny0)  # видимая высота: при overflow низ объекта обрезается краем кадра
         nx1, ny1 = nx0 + nw, ny0 + vh
@@ -361,15 +370,19 @@ class ObjectScalePlacer:
                 obst = obst * (1 - _dilate(old_foot, 4))
                 tol = max(16.0, 0.01 * float(foot.sum().item()))
 
+                P = max(0, -lo_x, hi_x + nw - W)  # поля для объекта за краем кадра
+                obst_p = F.pad(obst, (P, P)) if P > 0 else obst
+
                 def overlap(dx):
-                    x0 = nx0 + dx
-                    return foot * obst[ny0:ny1, x0:x0 + nw]
+                    x0 = nx0 + dx + P
+                    return foot * obst_p[ny0:ny1, x0:x0 + nw]
 
                 ov0 = overlap(0)
                 c0 = float(ov0.sum().item())
                 coll_before = coll_after = int(c0)
                 coll_vis = torch.zeros((H, W), device=dev)
-                coll_vis[ny0:ny1, nx0:nx1] = ov0
+                vx0_, vx1_ = max(0, nx0), min(W, nx1)
+                coll_vis[ny0:ny1, vx0_:vx1_] = ov0[:, vx0_ - nx0:vx1_ - nx0]
                 if c0 > tol:
                     if shift_direction == "left":
                         sign = -1
@@ -383,7 +396,7 @@ class ObjectScalePlacer:
                     best = (c0, 0)
                     for dist in range(2, int(shift_max) + 1, 2):
                         dx = sign * dist
-                        if nx0 + dx < 0 or nx0 + dx + nw > W:
+                        if nx0 + dx < lo_x or nx0 + dx > hi_x:
                             break
                         c = float(overlap(dx).sum().item())
                         if c < best[0]:
@@ -396,6 +409,9 @@ class ObjectScalePlacer:
                     nx0 += shift_dx
                     nx1 = nx0 + nw
 
+        # видимая по горизонтали часть нового объекта (он может уходить за край кадра)
+        vx0, vx1 = max(0, nx0), min(W, nx1)
+        lx0, lx1 = vx0 - nx0, vx1 - nx0
         # --- 0) доп. защита: предметы ПЕРЕД новым объектом (по глубине)
         extra_px = 0
         if occluders is not None and depth is not None:
@@ -413,7 +429,7 @@ class ObjectScalePlacer:
             if vals.numel() > 0:
                 d_front = torch.quantile(vals, 0.9)  # передний край объекта
                 zone = torch.zeros((H, W), device=dev)
-                zone[ny0:ny1, nx0:nx1] = 1.0
+                zone[ny0:ny1, vx0:vx1] = 1.0
                 zone = _dilate(zone, 8)
                 extra = occ * zone * (dep > d_front + depth_margin).float() * (1 - old)
                 extra = _dilate(_erode(extra, 5), 9)  # убрать мелкие островки, чуть расширить
@@ -422,8 +438,8 @@ class ObjectScalePlacer:
 
         if drop_inner_protect and mode == "collage" and prot.sum() > 0:
             fp = torch.zeros((H, W), device=dev)
-            fp[ny0:ny1, nx0:nx1] = (F.interpolate(rm_c[None, None], size=(nh, nw), mode="bilinear",
-                                    align_corners=False)[0, 0] > 0.5).float()[:vh]
+            fp[ny0:ny1, vx0:vx1] = (F.interpolate(rm_c[None, None], size=(nh, nw), mode="bilinear",
+                                    align_corners=False)[0, 0] > 0.5).float()[:vh, lx0:lx1]
             fp = _dilate(fp, 2).cpu().numpy() > 0.5
             p_np = prot.cpu().numpy() > 0.5
             lab, n = ndi.label(p_np)
@@ -448,7 +464,7 @@ class ObjectScalePlacer:
 
         # --- 2) поставить новый объект
         box = torch.zeros((H, W), device=dev)
-        box[ny0:ny1, nx0:nx1] = 1.0
+        box[ny0:ny1, vx0:vx1] = 1.0
         obj_mask = torch.zeros((H, W), device=dev)
         shadow_px = 0
         if mode == "collage" and shadow_source is not None and shadow_strength > 0:
@@ -498,24 +514,24 @@ class ObjectScalePlacer:
             antialias = nw < rw or nh < rh
             rc = F.interpolate(ref_c.permute(2, 0, 1)[None], size=(nh, nw),
                                mode="bicubic", align_corners=False,
-                               antialias=antialias)[0].permute(1, 2, 0).clamp(0, 1)[:vh]
+                               antialias=antialias)[0].permute(1, 2, 0).clamp(0, 1)[:vh, lx0:lx1]
             am = F.interpolate(rm_c[None, None], size=(nh, nw), mode="bilinear",
-                               align_corners=False, antialias=antialias)[0, 0][:vh]
+                               align_corners=False, antialias=antialias)[0, 0][:vh, lx0:lx1]
             if soft_alpha:
                 am = am.clamp(0, 1)  # мягкий край из маски как есть
             else:
                 am = _blur((am > 0.5).float(), 1)  # мягкий край без сужения
-            am = am * (1 - prot[ny0:ny1, nx0:nx1])
+            am = am * (1 - prot[ny0:ny1, vx0:vx1])
             hm = F.interpolate(hid_c[None, None], size=(nh, nw), mode="bilinear",
-                            align_corners=False)[0, 0][:vh]
-            hm = _blur((hm > 0.5).float(), 2) * (1 - prot[ny0:ny1, nx0:nx1])
+                            align_corners=False)[0, 0][:vh, lx0:lx1]
+            hm = _blur((hm > 0.5).float(), 2) * (1 - prot[ny0:ny1, vx0:vx1])
             a2 = torch.maximum(am, hm)
-            region = guide[ny0:ny1, nx0:nx1]
-            guide[ny0:ny1, nx0:nx1] = region * (1 - a2[..., None]) + rc * a2[..., None]
-            obj_mask[ny0:ny1, nx0:nx1] = am  # залитая часть не защищается — её дорисует второй проход
+            region = guide[ny0:ny1, vx0:vx1]
+            guide[ny0:ny1, vx0:vx1] = region * (1 - a2[..., None]) + rc * a2[..., None]
+            obj_mask[ny0:ny1, vx0:vx1] = am  # залитая часть не защищается — её дорисует второй проход
         else:
             base = guide.clone()
-            guide = _draw_rect(guide, nx0, ny0, nx1, ny1, frame_thickness,
+            guide = _draw_rect(guide, vx0, ny0, vx1, ny1, frame_thickness,
                                (0.0, 1.0, 0.0))
             # рамку не рисуем поверх защищённых предметов
             guide = torch.where(prot[..., None] > 0.5, base, guide)
@@ -539,7 +555,7 @@ class ObjectScalePlacer:
         # --- превью: красная рамка = старый объект, синяя = новый
         prev = guide.clone()
         prev = _draw_rect(prev, ox0, oy0, ox1, oy1, 3, (1.0, 0.0, 0.0))
-        prev = _draw_rect(prev, nx0, ny0, nx1, ny1, 3, (0.0, 0.4, 1.0))
+        prev = _draw_rect(prev, vx0, ny0, vx1, ny1, 3, (0.0, 0.4, 1.0))
 
         if coll_vis is not None:  # пурпурным — где было столкновение до сдвига
             cv = coll_vis[..., None] * 0.7
@@ -558,6 +574,7 @@ class ObjectScalePlacer:
                 f"тень перенесена: {shadow_px} px; "
                 f"автосдвиг: {shift_dx:+d} px {shift_side} (наложение {coll_before} -> {coll_after} px)"
                 + ("; ВНИМАНИЕ: объект ограничен размером кадра" if k < 1.0 else "")
+                + (f"\nза краем кадра: {nw - (vx1 - vx0)} px по ширине" if vx1 - vx0 < nw else "")
                 + (f"\nстарый объект обрезан нижним краем кадра: новый поставлен от его верха, "
                    f"за нижний край уходит {nh - vh} px" if overflow else ""))
         return (guide[None].clamp(0, 1), union[None], obj_mask[None],
