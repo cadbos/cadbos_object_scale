@@ -387,31 +387,27 @@ class ObjectScalePlacer:
                 foot[:int(round(nh * (1.0 - collision_band)))] = 0
                 foot = foot[:vh]
                 # там, где объект этапа 1 уже касался предметов, касание допустимо
-                # Касания, которые старый объект имел бы при том же масштабе, тоже допустимы:
-                # старый объект преобразуется так же, как рамка 100% -> новая рамка
-                # (масштаб вокруг точки привязки). Иначе при масштабе > 100% увеличенный
-                # объект "сталкивается" с соседями, к которым и так примыкал, и съезжает.
-                if fit == "box":
-                    bx0, by0 = ox0, oy0
-                else:
-                    if h_anchor == "left":
-                        bx0 = ox0
-                    elif h_anchor == "right":
-                        bx0 = ox1 - nw_base
-                    else:
-                        bx0 = (ox0 + ox1) / 2.0 - nw_base / 2.0
-                    if anchor == "bottom":
-                        by0 = oy1 - nh_base
-                    elif anchor == "top":
-                        by0 = oy0
-                    else:
-                        by0 = (oy0 + oy1) / 2.0 - nh_base / 2.0
-                    bx0, by0 = bx0 + int(offset_x), by0 + int(offset_y)
-                sx, sy = nw / max(1e-6, nw_base), nh / max(1e-6, nh_base)
+                # Касания, которые старый объект имел бы, будь он такого же размера, как
+                # новый, тоже допустимы: старый объект растягивается до размеров новой рамки
+                # (если она больше — из-за масштаба > 100% или другого режима fit, например
+                # area) и ставится по тем же точкам привязки. Иначе увеличенный объект
+                # "сталкивается" с соседями, к которым и так примыкал, и съезжает.
+                ex = max(1.0, nw / ow, nw / max(1e-6, nw_base))
+                ey = max(1.0, nh / oh, nh / max(1e-6, nh_base))
                 old_s = torch.zeros((H, W), device=dev)
-                tw, th = max(1, int(round(ow * sx))), max(1, int(round(oh * sy)))
-                tx0 = int(round(nx0_raw + (ox0 - bx0) * sx))
-                ty0 = int(round(ny0_raw + (oy0 - by0) * sy))
+                tw, th = max(1, int(round(ow * ex))), max(1, int(round(oh * ey)))
+                if h_anchor == "left":
+                    tx0 = nx0_raw
+                elif h_anchor == "right":
+                    tx0 = nx0_raw + nw - tw
+                else:
+                    tx0 = int(round(nx0_raw + nw / 2.0 - tw / 2.0))
+                if anchor == "bottom":
+                    ty0 = ny0_raw + nh - th
+                elif anchor == "top":
+                    ty0 = ny0_raw
+                else:
+                    ty0 = int(round(ny0_raw + nh / 2.0 - th / 2.0))
                 crop = F.interpolate(old[oy0:oy1, ox0:ox1][None, None], size=(th, tw),
                                      mode="nearest")[0, 0]
                 cx0, cy0 = max(0, tx0), max(0, ty0)
