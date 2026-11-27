@@ -319,7 +319,7 @@ class ObjectScalePlacer:
         k = min(1.0, W / nw) if overflow else min(1.0, W / nw, H / nh)  # не больше кадра
         nw, nh = max(2, int(round(nw * k))), max(2, int(round(nh * k)))
         k_base = min(1.0, W / nw_base) if overflow else min(1.0, W / nw_base, H / nh_base)
-        nh_base = nh_base * k_base
+        nw_base, nh_base = nw_base * k_base, nh_base * k_base
 
         if h_anchor == "center":  # объект продолжен дорисовкой — держать его видимый край
             if pad_right > 0 and pad_left == 0:
@@ -347,6 +347,7 @@ class ObjectScalePlacer:
             ny0 = int(round((oy0 + oy1) / 2.0 - nh / 2.0))
         nx0 += int(offset_x)
         ny0 += int(offset_y)
+        nx0_raw, ny0_raw = nx0, ny0  # до ограничения краями кадра
         # допустимый диапазон левого края: за край кадра — только со стороны, где старый обрезан
         ovf = int(round(nw * float(x_overflow)))
         lo_x = -ovf if ox0 <= 2 else 0
@@ -382,8 +383,41 @@ class ObjectScalePlacer:
                 foot[:int(round(nh * (1.0 - collision_band)))] = 0
                 foot = foot[:vh]
                 # там, где объект этапа 1 уже касался предметов, касание допустимо
+                # Касания, которые старый объект имел бы при том же масштабе, тоже допустимы:
+                # старый объект преобразуется так же, как рамка 100% -> новая рамка
+                # (масштаб вокруг точки привязки). Иначе при масштабе > 100% увеличенный
+                # объект "сталкивается" с соседями, к которым и так примыкал, и съезжает.
+                if fit == "box":
+                    bx0, by0 = ox0, oy0
+                else:
+                    if h_anchor == "left":
+                        bx0 = ox0
+                    elif h_anchor == "right":
+                        bx0 = ox1 - nw_base
+                    else:
+                        bx0 = (ox0 + ox1) / 2.0 - nw_base / 2.0
+                    if anchor == "bottom":
+                        by0 = oy1 - nh_base
+                    elif anchor == "top":
+                        by0 = oy0
+                    else:
+                        by0 = (oy0 + oy1) / 2.0 - nh_base / 2.0
+                    bx0, by0 = bx0 + int(offset_x), by0 + int(offset_y)
+                sx, sy = nw / max(1e-6, nw_base), nh / max(1e-6, nh_base)
+                old_s = torch.zeros((H, W), device=dev)
+                tw, th = max(1, int(round(ow * sx))), max(1, int(round(oh * sy)))
+                tx0 = int(round(nx0_raw + (ox0 - bx0) * sx))
+                ty0 = int(round(ny0_raw + (oy0 - by0) * sy))
+                crop = F.interpolate(old[oy0:oy1, ox0:ox1][None, None], size=(th, tw),
+                                     mode="nearest")[0, 0]
+                cx0, cy0 = max(0, tx0), max(0, ty0)
+                cx1, cy1 = min(W, tx0 + tw), min(H, ty0 + th)
+                if cx1 > cx0 and cy1 > cy0:
+                    old_s[cy0:cy1, cx0:cx1] = crop[cy0 - ty0:cy1 - ty0, cx0 - tx0:cx1 - tx0]
                 old_foot = old.clone()
                 old_foot[:max(0, int(round(oy1 - oh * collision_band)))] = 0
+                old_s[:max(0, int(round(ty0 + th - th * collision_band)))] = 0
+                old_foot = torch.maximum(old_foot, old_s)
                 obst = obst * (1 - _dilate(old_foot, 4))
                 tol = max(16.0, 0.01 * float(foot.sum().item()))
 
