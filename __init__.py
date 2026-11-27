@@ -21,7 +21,7 @@ from .mask_window import MaskWindow
 from .window_preview import WindowPreview
 from .mask_parts_in_front import MaskPartsInFront
 from .mask_amodal_extend import MaskAmodalExtend
-from .object_orient_anything import ObjectOrientAnything, ObjectOrientPick
+from .object_orient_anything import ObjectOrientAnything, ObjectOrientPick, ObjectOrientCorrect
 from .mask_drop_unchanged import MaskDropUnchanged
 from .vram_headroom import VRAMHeadroom
 
@@ -54,6 +54,7 @@ NODE_CLASS_MAPPINGS = {
     "MaskAmodalExtend": MaskAmodalExtend,
     "ObjectOrientAnything": ObjectOrientAnything,
     "ObjectOrientPick": ObjectOrientPick,
+    "ObjectOrientCorrect": ObjectOrientCorrect,
     "MaskDropUnchanged": MaskDropUnchanged,
     "VRAMHeadroom": VRAMHeadroom,
 }
@@ -85,6 +86,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MaskAmodalExtend": "Mask Amodal Extend",
     "ObjectOrientAnything": "Object Orient Anything",
     "ObjectOrientPick": "Object Orient Pick",
+    "ObjectOrientCorrect": "Object Orient Correct",
     "MaskDropUnchanged": "Mask Drop Unchanged",
     "VRAMHeadroom": "VRAM Headroom (cadbos)",
 }

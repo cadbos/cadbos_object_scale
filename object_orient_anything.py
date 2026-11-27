@@ -126,6 +126,14 @@ def _infer(pil):
             int(float(ans["ref_alpha_pred"])))
 
 
+def _key_for_turn(turn, flip_lr):
+    """Поворот камеры (градусы, относительно текущего вида) -> ключ команды LoRA."""
+    key = _KEYS[int(((turn + 22.5) % 360) // 45)]
+    if flip_lr:
+        key = key.replace("left", "@").replace("right", "left").replace("@", "right")
+    return key
+
+
 def _ang_dist(a, b):
     return abs((a - b + 180.0) % 360.0 - 180.0)
 
@@ -167,9 +175,14 @@ class ObjectOrientAnything:
             "keep_on_gpu": ("BOOLEAN", {"default": False,
                                         "tooltip": "Держать модель в видеопамяти между запусками "
                                                    "(быстрее, но ~5 ГБ VRAM постоянно)."}),
+                },
+        "optional": {
+            "reference": ("IMAGE", {"tooltip": "Референс на белом фоне (узел 388). LoRA поворачивает "
+                                               "камеру ОТНОСИТЕЛЬНО того, как предмет снят на "
+                                               "референсе, поэтому нужен его собственный ракурс."}),
         }}
 
-    def run(self, image, mask, flip_lr, distance, keep_on_gpu):
+    def run(self, image, mask, flip_lr, distance, keep_on_gpu, reference=None):
         _STATE["keep"] = bool(keep_on_gpu)
         img = image[0].float()[..., :3]
         H, W, _ = img.shape
@@ -193,9 +206,12 @@ class ObjectOrientAnything:
         if sym == 0:
             return ("", "", elev, f"{nums} — у предмета нет выраженного переда, поворот не нужен",
                     -1.0, el)
-        key = _KEYS[int(((az + 22.5) % 360) // 45)]
-        if flip_lr:
-            key = key.replace("left", "@").replace("right", "left").replace("@", "right")
+        turn = az  # без референса считается, что он снят спереди (азимут 0°)
+        if reference is not None:
+            ref_az, _, _ = _infer(_white_bg_pil(reference))
+            turn = (az - ref_az) % 360.0
+            nums += f"; референс: азимут {ref_az:.0f}° → повернуть на {turn:.0f}°"
+        key = _key_for_turn(turn, flip_lr)
         camera = f"<sks> {_LORA[key]} {elev} {distance}"
         return (key, camera, elev, f"{nums} → ракурс {key}; камера: {camera}; "
                                    f"высота камеры для 2-го прохода: {elev}", az, el)
@@ -253,3 +269,49 @@ class ObjectOrientPick:
             return (res[0][2], info + "\n→ взят 2-й проход")
         best = min(res, key=lambda r: r[0])
         return (best[2], info + f"\n→ взят {best[1]}")
+
+
+class ObjectOrientCorrect:
+    """Команда для 2-го прохода LoRA: смотрит, как повёрнут предмет после 1-го
+    прохода, и просит довернуть только остаток (LoRA поворачивает относительно
+    входной картинки — повтор той же команды развернул бы предмет ещё раз)."""
+    CATEGORY = "cadbos/object"
+    FUNCTION = "run"
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("prompt", "info")
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "image": ("IMAGE", {"tooltip": "Результат 1-го прохода (узел 395)."}),
+            "azimuth": ("FLOAT", {"forceInput": True,
+                                  "tooltip": "Выход azimuth узла Object Orient Anything."}),
+            "elevation": ("STRING", {"forceInput": True,
+                                     "tooltip": "Выход elevation узла Object Orient Anything."}),
+            "flip_lr": ("BOOLEAN", {"default": True,
+                                    "tooltip": "Как на узле Object Orient Anything."}),
+            "distance": (["medium shot", "close-up", "wide shot"], {"default": "medium shot"}),
+            "tolerance": ("FLOAT", {"default": 22.5, "min": 0.0, "max": 90.0, "step": 2.5,
+                                    "tooltip": "Если остаток поворота меньше, не поворачивать."}),
+            "suffix": ("STRING", {"multiline": True, "default":
+                                  "plain white background, no floor, no shadow, "
+                                  "the whole object is visible"}),
+        }}
+
+    def run(self, image, azimuth, elevation, flip_lr, distance, tolerance, suffix):
+        if azimuth < 0:
+            key, info = "front", "ракурс старого объекта не определён — без поворота"
+        else:
+            az, _, _ = _infer(_white_bg_pil(image))
+            turn = (azimuth - az) % 360.0
+            if _ang_dist(turn, 0.0) < float(tolerance):
+                key = "front"
+                info = f"после 1-го прохода {az:.0f}°, нужно {azimuth:.0f}° — поворот не нужен"
+            else:
+                key = _key_for_turn(turn, flip_lr)
+                info = (f"после 1-го прохода {az:.0f}°, нужно {azimuth:.0f}° — "
+                        f"довернуть на {turn:.0f}° ({key})")
+        prompt = f"<sks> {_LORA[key]} {elevation} {distance}"
+        if suffix.strip():
+            prompt += ", " + suffix.strip()
+        return (prompt, info + f"\nпромпт: {prompt}")
