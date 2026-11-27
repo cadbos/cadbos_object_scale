@@ -153,8 +153,8 @@ class ObjectOrientAnything:
     и выдаёт команду для Multiple-Angles LoRA. Работает для любых предметов."""
     CATEGORY = "cadbos/object"
     FUNCTION = "run"
-    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING", "FLOAT")
-    RETURN_NAMES = ("view", "camera", "elevation", "info", "azimuth")
+    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING", "FLOAT", "FLOAT")
+    RETURN_NAMES = ("view", "camera", "elevation", "info", "azimuth", "elevation_deg")
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -179,7 +179,7 @@ class ObjectOrientAnything:
         m = (_resize_mask(m.to(img.device), H, W) > 0.5).float()
         bb = _bbox(m)
         if bb is None:
-            return ("", "", "eye-level shot", "маска пустая", -1.0)
+            return ("", "", "eye-level shot", "маска пустая", -1.0, 15.0)
         x0, y0, x1, y1 = bb
         rgb = (img[y0:y1, x0:x1].clamp(0, 1) * 255).byte().cpu().numpy()
         alpha = (m[y0:y1, x0:x1] * 255).byte().cpu().numpy()
@@ -192,13 +192,13 @@ class ObjectOrientAnything:
         nums = f"азимут {az:.0f}°, возвышение {el:.0f}°, симметрия {sym}"
         if sym == 0:
             return ("", "", elev, f"{nums} — у предмета нет выраженного переда, поворот не нужен",
-                    -1.0)
+                    -1.0, el)
         key = _KEYS[int(((az + 22.5) % 360) // 45)]
         if flip_lr:
             key = key.replace("left", "@").replace("right", "left").replace("@", "right")
-        camera = f"<sks> {_LORA[key]} elevated shot {distance}"
+        camera = f"<sks> {_LORA[key]} {elev} {distance}"
         return (key, camera, elev, f"{nums} → ракурс {key}; камера: {camera}; "
-                                   f"высота камеры для 2-го прохода: {elev}", az)
+                                   f"высота камеры для 2-го прохода: {elev}", az, el)
 
 
 class ObjectOrientPick:
@@ -220,16 +220,36 @@ class ObjectOrientPick:
                                           "tooltip": "Брать 2-й проход (камера на уровне глаз), если он "
                                                      "отличается от нужного поворота не больше, "
                                                      "чем на столько градусов."}),
+                },
+        "optional": {
+            "elevation": ("FLOAT", {"forceInput": True,
+                                    "tooltip": "Выход elevation_deg узла Object Orient Anything."}),
+            "image_orig": ("IMAGE", {"tooltip": "Исходный референс без поворота (узел 388) — "
+                                                "третий кандидат."}),
+            "elev_weight": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 5.0, "step": 0.1,
+                                      "tooltip": "Насколько ошибка возвышения важна по сравнению "
+                                                 "с ошибкой азимута. 0 — как раньше, только азимут."}),
         }}
 
-    def run(self, image_a, image_b, azimuth, prefer_b_within):
-        if azimuth < 0:
-            return (image_b, "ракурс старого объекта не определён — взят 2-й проход")
-        az_a, _, _ = _infer(_white_bg_pil(image_a))
-        az_b, _, _ = _infer(_white_bg_pil(image_b))
-        da, db = _ang_dist(az_a, azimuth), _ang_dist(az_b, azimuth)
-        info = (f"нужно {azimuth:.0f}°; 1-й проход {az_a:.0f}° (ошибка {da:.0f}°), "
-                f"2-й проход {az_b:.0f}° (ошибка {db:.0f}°)")
-        if db <= float(prefer_b_within) or db <= da:
-            return (image_b, info + " → взят 2-й проход")
-        return (image_a, info + " → взят 1-й проход")
+    def run(self, image_a, image_b, azimuth, prefer_b_within, elevation=None,
+            image_orig=None, elev_weight=1.0):
+        cands = [("2-й проход", image_b), ("1-й проход", image_a)]
+        if image_orig is not None:
+            cands.append(("исходный референс", image_orig))
+        res, parts = [], []
+        for name, img in cands:
+            az, el, _ = _infer(_white_bg_pil(img))
+            da = _ang_dist(az, azimuth) if azimuth >= 0 else 0.0
+            de = abs(el - elevation) if elevation is not None else 0.0
+            err = da + float(elev_weight) * de
+            res.append((err, name, img))
+            parts.append(f"{name}: азимут {az:.0f}° (ошибка {da:.0f}°), "
+                         f"возвышение {el:.0f}° (ошибка {de:.0f}°), итог {err:.0f}")
+        need = (f"нужно: азимут {azimuth:.0f}°" if azimuth >= 0 else "азимут не важен")
+        if elevation is not None:
+            need += f", возвышение {elevation:.0f}°"
+        info = need + "\n" + "\n".join(parts)
+        if res[0][0] <= float(prefer_b_within):  # 2-й проход достаточно точен
+            return (res[0][2], info + "\n→ взят 2-й проход")
+        best = min(res, key=lambda r: r[0])
+        return (best[2], info + f"\n→ взят {best[1]}")
