@@ -43,11 +43,13 @@ class ObjectScalePlacer:
                     "default": 0.0, "min": 0.0, "max": 400.0, "step": 1.0,
                     "tooltip": "0 = автоматически (вписать в рамку старого объекта). "
                                "100 = как авто, 150 = в 1,5 раза больше, 70 = на 30% меньше."}),
-                "fit": (["contain", "height", "width", "box"], {
+                "fit": (["contain", "height", "width", "box", "area"], {
                     "default": "contain",
                     "tooltip": "Как считать авторазмер: contain — целиком внутри рамки "
                                "старого объекта; height — по высоте; width — по ширине; "
-                               "box — рамка старого объекта как есть (только для режима frame)."}),
+                               "box — рамка старого объекта как есть (только для режима frame); "
+                               "area — та же площадь рамки, что у старого (для предметов "
+                               "с другими пропорциями: стул вместо стула, кресло вместо стула)."}),
                 "anchor": (["bottom", "center", "top"], {
                     "default": "bottom",
                     "tooltip": "Какая точка старого объекта остаётся на месте: "
@@ -311,6 +313,8 @@ class ObjectScalePlacer:
                 s_auto = oh / rh
             elif fit == "width":
                 s_auto = ow / rw
+            elif fit == "area":
+                s_auto = ((ow * oh) / float(rw * rh)) ** 0.5
             else:
                 s_auto = min(ow / rw, oh / rh)
             s = s_auto * factor
